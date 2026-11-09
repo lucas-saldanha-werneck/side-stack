@@ -6,7 +6,12 @@ declare module 'claude-code' {
     // true once side-stack has set itself up in this session. A hint only:
     // presence is `stack` from side-stack in $.command.list(). Session state,
     // so it is gone after a /clear until side-stack's next event sets it.
-    'side-stack': { present: boolean; order: string[] | null; setUpFor: string }
+    'side-stack': {
+      present: boolean
+      // Where each section goes (plugin names; null = empty, or install order for `order`).
+      zones: { order: string[] | null; header: string[] | null; footer: string[] | null }
+      setUpFor: string
+    }
     // Each known guest's own flag, written by that guest: true while it draws
     // its section into the pane `side-stack`. side-stack only reads them.
     'assumptions-pane': { stacked: boolean }

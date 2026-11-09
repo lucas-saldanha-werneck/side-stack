@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { CONFIG_EXAMPLE } from '../hooks/register'
+import { CONFIG_EXAMPLE, estimateRows } from '../hooks/register'
 
 // On Windows the engine resolves a drive-less absolute path onto the current
 // drive with backslashes (D:\home\u\...). Compare paths in POSIX form.
@@ -182,10 +182,13 @@ test('config: the first session writes the starter file, every key null', async 
   await start($)
   expect(writes).toEqual([{ path: CONFIG, text: CONFIG_EXAMPLE }])
   const cfg = JSON.parse(CONFIG_EXAMPLE) as Record<string, unknown>
-  expect(Object.keys(cfg).sort()).toEqual(['_doc', 'open_on_start', 'order', 'title'])
+  expect(Object.keys(cfg).sort()).toEqual(['_doc', 'footer', 'header', 'open_on_start', 'order', 'title'])
   expect(cfg.title).toBeNull()
   expect(cfg.open_on_start).toBeNull()
   expect(cfg.order).toBeNull()
+  expect(cfg.header).toBeNull()
+  expect(cfg.footer).toBeNull()
+  expect(Object.keys(cfg._doc as object)).toEqual(expect.arrayContaining(['order', 'header', 'footer']))
   // null means the default: the pane still opens at start, titled Stack.
   expect(opened).toEqual([expect.objectContaining({ title: 'Stack' })])
 })
@@ -664,7 +667,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(savedOrder(writes)).toEqual(['idea-shelf', 'plan-checklist'])
     // every other key of the file is kept
     const kept = JSON.parse(writes.at(-1)!.text) as Record<string, unknown>
-    expect(Object.keys(kept).sort()).toEqual(['_doc', 'open_on_start', 'order', 'title'])
+    expect(Object.keys(kept).sort()).toEqual(['_doc', 'footer', 'header', 'open_on_start', 'order', 'title'])
     expect(await run($, 'order reset')).toContain('install order')
     expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Plan 2/4', 'Ideas'])
     expect(savedOrder(writes)).toBeNull()
@@ -687,7 +690,9 @@ for (const surface of ['terminal', 'desktop'] as const) {
     engine(on, { [CONFIG]: JSON.stringify({ order: ['idea-shelf', 'plan-checklist'] }) })
     await start($, surface)
     expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Ideas', 'Plan 2/4'])
-    expect(await run($, 'order')).toContain('Order: idea-shelf, plan-checklist')
+    const shown = await run($, 'order')
+    expect(shown).toContain('1 · idea-shelf')
+    expect(shown).toContain('2 · plan-checklist')
   })
 
   test(`order: an unknown name is refused with the known ones, nothing saved (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
@@ -730,12 +735,15 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 }
 
-test('/stack order with no list shows the order and the known names', async ($, on) => {
+test('/stack order with no list shows every known name, numbered, by zone', async ($, on) => {
   engine(on)
   await start($)
   const answer = await run($, 'order')
-  expect(answer).toContain('Order: install order (default)')
-  expect(answer).toContain('Known: assumptions-pane, idea-shelf, plan-checklist, clean-view')
+  expect(answer).toContain('Header: (empty)')
+  expect(answer).toContain('Footer: (empty)')
+  for (const [i, name] of ['assumptions-pane', 'idea-shelf', 'plan-checklist', 'clean-view'].entries()) {
+    expect(answer).toContain(`${i + 1} · ${name} (not shown)`)
+  }
 })
 
 test('/stack with other words answers how to use it', async ($, on) => {
@@ -806,5 +814,269 @@ for (const surface of ['terminal', 'desktop'] as const) {
     state = {} // now the engine empties session state
     await prompt()
     expect(state['side-stack.present']?.value).toBe(true)
+  })
+}
+
+// ---- 0.4.0: item numbers, header and footer zones
+
+const saved = (writes: Write[], key: 'order' | 'header' | 'footer'): unknown => {
+  const last = writes.filter(w => w.path === CONFIG).at(-1)
+  return last === undefined ? 'no write' : (JSON.parse(last.text) as Record<string, unknown>)[key]
+}
+const mountWith = async ($: unknown, surface: 'terminal' | 'desktop', props: Record<string, unknown> = {}) =>
+  ($ as { ui: { mount: Function } }).ui.mount({ ...PANE, props: { ...PANE.props, ...props }, surface })
+const rootOf = async (ui: { drawn: () => Promise<unknown> }): Promise<{ props?: Record<string, unknown> }> =>
+  (await ui.drawn()) as { props?: Record<string, unknown> }
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`numbers: /stack order 2,1 orders the body by the shown numbers (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    const { writes } = engine(on, { [CONFIG]: CONFIG_EXAMPLE })
+    await start($, surface)
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Plan 2/4', 'Ideas'])
+    const shown = await run($, 'order')
+    expect(shown).toContain('1 · plan-checklist')
+    expect(shown).toContain('2 · idea-shelf')
+    expect(shown).toContain('3 · assumptions-pane (not shown)')
+    await run($, 'order 2,1')
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Ideas', 'Plan 2/4'])
+    expect(saved(writes, 'order')).toEqual(['idea-shelf', 'plan-checklist'])
+  })
+
+  test(`numbers: names and numbers mix in one list (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    const { writes } = engine(on)
+    await start($, surface)
+    await textsOf($ as never, surface)
+    expect(await run($, 'order idea-shelf,1')).toContain('Order: idea-shelf, plan-checklist')
+    expect(saved(writes, 'order')).toEqual(['idea-shelf', 'plan-checklist'])
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Ideas', 'Plan 2/4'])
+  })
+}
+
+test('numbers: a number with no item changes nothing and shows the list', { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+  const { writes } = engine(on)
+  await start($)
+  await textsOf($ as never, 'terminal')
+  const before = writes.length
+  const answer = await run($, 'header 9')
+  expect(answer).toContain('Not changed: no item 9')
+  expect(answer).toContain('1 · plan-checklist')
+  expect(writes.length).toBe(before)
+})
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`zones: footer and header move items there, renumbered after each change (${surface})`, { plugins: [ASSUME_ABOVE, PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    const { writes } = engine(on)
+    await start($, surface)
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Assumptions', 'Plan 2/4', 'Ideas'])
+    // assumptions-pane draws above side-stack; its stacked flag is not set in
+    // this stand-in, so it is numbered as listed by name: use the name.
+    const footer = await run($, 'footer assumptions-pane')
+    expect(footer).toContain('Footer: assumptions-pane')
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Plan 2/4', 'Ideas', 'Assumptions'])
+    expect(saved(writes, 'footer')).toEqual(['assumptions-pane'])
+    // Now: body 1 plan-checklist, 2 idea-shelf, ...; footer last.
+    const shown = await run($, 'order')
+    expect(shown).toContain('1 · plan-checklist')
+    expect(shown).toContain('2 · idea-shelf')
+    expect(shown).toMatch(/Footer:\\n\d+ · assumptions-pane/)
+    await run($, 'header 2')
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Ideas', 'Plan 2/4', 'Assumptions'])
+    expect(saved(writes, 'header')).toEqual(['idea-shelf'])
+    expect(saved(writes, 'footer')).toEqual(['assumptions-pane'])
+  })
+
+  test(`zones: a zone keeps its own order (${surface})`, { plugins: [ASSUME_ABOVE, PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    const { writes } = engine(on)
+    await start($, surface)
+    await run($, 'header idea-shelf,plan-checklist')
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Ideas', 'Plan 2/4', 'Assumptions'])
+    await run($, 'header plan-checklist,idea-shelf')
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Plan 2/4', 'Ideas', 'Assumptions'])
+    await run($, 'footer idea-shelf,plan-checklist')
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Assumptions', 'Ideas', 'Plan 2/4'])
+    // moved out of the header into the footer: the header is empty again
+    expect(saved(writes, 'header')).toBeNull()
+    expect(saved(writes, 'footer')).toEqual(['idea-shelf', 'plan-checklist'])
+  })
+
+  test(`zones: none empties a zone and its items go back to the body (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    const { writes } = engine(on)
+    await start($, surface)
+    await run($, 'footer plan-checklist')
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Ideas', 'Plan 2/4'])
+    expect(await run($, 'footer none')).toContain('Footer: empty')
+    expect(saved(writes, 'footer')).toBeNull()
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Plan 2/4', 'Ideas'])
+    await run($, 'header idea-shelf')
+    await run($, 'header none')
+    expect(saved(writes, 'header')).toBeNull()
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Plan 2/4', 'Ideas'])
+  })
+
+  test(`zones: /stack order reset clears order, header and footer (${surface})`, { plugins: [ASSUME_ABOVE, PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    const { writes } = engine(on)
+    await start($, surface)
+    await run($, 'header idea-shelf')
+    await run($, 'footer assumptions-pane')
+    await run($, 'order plan-checklist')
+    expect(await run($, 'order reset')).toContain('install order')
+    expect(saved(writes, 'order')).toBeNull()
+    expect(saved(writes, 'header')).toBeNull()
+    expect(saved(writes, 'footer')).toBeNull()
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Assumptions', 'Plan 2/4', 'Ideas'])
+  })
+
+  test(`zones: an older config with only order still works; header and footer by hand apply at start (${surface})`, { plugins: [ASSUME_ABOVE, PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    engine(on, { [CONFIG]: JSON.stringify({ title: null, order: ['idea-shelf', 'plan-checklist'] }) })
+    await start($, surface)
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Assumptions', 'Ideas', 'Plan 2/4'])
+    const shown = await run($, 'order')
+    expect(shown).toContain('Header: (empty)')
+    expect(shown).toContain('Footer: (empty)')
+  })
+
+  test(`zones: header and footer from the settings file, a name in two zones kept in the first (${surface})`, { plugins: [ASSUME_ABOVE, PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    engine(on, { [CONFIG]: JSON.stringify({ header: ['plan-checklist'], footer: ['plan-checklist', 'idea-shelf'], order: ['idea-shelf'] }) })
+    await start($, surface)
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Plan 2/4', 'Assumptions', 'Ideas'])
+  })
+
+  test(`zones: unknown names change nothing (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    const { writes } = engine(on)
+    await start($, surface)
+    const before = writes.length
+    expect(await run($, 'footer nope')).toContain('Not changed: unknown nope')
+    expect(writes.length).toBe(before)
+  })
+}
+
+// ASSUME_ABOVE that also says it is stacked, as the real guests do.
+const STACKED_ASSUME_ABOVE = {
+  name: 'assumptions-pane',
+  tier: 'prepend' as const,
+  register(on: On) {
+    on('session.start', async ($, e, next) => {
+      await $.state.set({ plugin: 'assumptions-pane', key: 'stacked' }, true)
+      return next(e)
+    })
+    on('ui.render', { component: 'Pane', requestId: 'side-stack' }, async ($, e, next) => {
+      const { Box, Text } = $.ui.resolve(e)
+      const section = <Box key="side-stack:assumptions-pane" flexDirection="column"><Text>Assumptions</Text></Box>
+      const below = await next(e)
+      type N = { props?: Record<string, unknown>; children?: unknown[] }
+      const fill = (n: unknown): unknown => {
+        const el = n as N | null
+        if (el === null || typeof el !== 'object' || !Array.isArray(el.children)) return undefined
+        for (let i = 0; i < el.children.length; i++) {
+          const c = el.children[i] as N | null
+          const swap = c !== null && typeof c === 'object' && c.props?.key === 'side-stack:slot:assumptions-pane' ? section : fill(c)
+          if (swap !== undefined) {
+            const children = [...el.children]
+            children[i] = swap
+            return { ...el, children }
+          }
+        }
+        return undefined
+      }
+      const filled = fill(below)
+      if (filled !== undefined) return filled as typeof below
+      return <Box flexDirection="column">{section}{below}</Box>
+    })
+  },
+}
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`footer: pinned to the bottom when docked with room to spare (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    engine(on)
+    await start($, surface)
+    await run($, 'footer plan-checklist')
+    const ui = await mountWith($, surface)
+    expect((await ui.find({ key: 'stack-pinned' }))?.props.height).toBe(20)
+    const top = await ui.find({ key: 'stack-top' })
+    expect(top?.props.flexGrow).toBe(1)
+    expect(top?.props.overflow).toBe('hidden')
+    const footer = await ui.find({ key: 'stack-footer' })
+    expect(footer?.props.flexShrink).toBe(0)
+    expect(footer?.text).toContain('Plan 2/4')
+    expect(sectionsOf((await ui.findAll({ type: 'Text' })).map(t => t.text))).toEqual(['Ideas', 'Plan 2/4'])
+    await ui.unmount()
+  })
+
+  test(`footer: not pinned inline, without room, or when it does not fit (one column, nothing cut) (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    engine(on)
+    await start($, surface)
+    await run($, 'footer plan-checklist')
+    for (const props of [{ placement: 'inline' }, { scroll: { offset: 0, bodyRows: 0 } }, { scroll: { offset: 0, bodyRows: 1 } }]) {
+      const ui = await mountWith($, surface, props)
+      expect(await ui.find({ key: 'stack-pinned' })).toBeUndefined()
+      expect(await ui.find({ key: 'stack-top' })).toBeUndefined()
+      expect(sectionsOf((await ui.findAll({ type: 'Text' })).map(t => t.text))).toEqual(['Ideas', 'Plan 2/4'])
+      await ui.unmount()
+    }
+  })
+
+  test(`footer: not pinned while a guest above side-stack draws (its size is unknown) (${surface})`, {
+    plugins: [STACKED_ASSUME_ABOVE, PLAN_BELOW, IDEAS_BELOW],
+  }, async ($, on) => {
+    engine(on)
+    await start($, surface)
+    await run($, 'footer assumptions-pane')
+    const ui = await mountWith($, surface)
+    expect(await ui.find({ key: 'stack-pinned' })).toBeUndefined()
+    // it still fills its slot, inside the footer
+    expect((await ui.find({ key: 'stack-footer' }))?.text).toContain('Assumptions')
+    expect(sectionsOf((await ui.findAll({ type: 'Text' })).map(t => t.text))).toEqual(['Plan 2/4', 'Ideas', 'Assumptions'])
+    await ui.unmount()
+  })
+
+  test(`header only: header on top, no pinning (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    engine(on)
+    await start($, surface)
+    await run($, 'header idea-shelf')
+    const ui = await mountWith($, surface)
+    expect(await ui.find({ key: 'stack-pinned' })).toBeUndefined()
+    expect((await ui.find({ key: 'stack-header' }))?.text).toContain('Ideas')
+    await ui.unmount()
+  })
+}
+
+test('/stack header with no list shows the numbered zones', async ($, on) => {
+  engine(on)
+  await start($)
+  const answer = await run($, 'header')
+  expect(answer).toContain('Header: (empty)')
+  expect(answer).toContain('1 · assumptions-pane')
+})
+
+test('estimateRows: wraps long text, truncates on request, adds gaps and borders, rows take their tallest piece', async () => {
+  const t = (text: string, props: Record<string, unknown> = {}) => ({ type: 'Text', props, children: [text] })
+  const box = (props: Record<string, unknown>, ...children: unknown[]) => ({ type: 'Box', props, children })
+  expect(estimateRows(t('short'), 20)).toBe(1)
+  expect(estimateRows(t('x'.repeat(45)), 20)).toBe(3)
+  expect(estimateRows(t('x'.repeat(45), { wrap: 'truncate-end' }), 20)).toBe(1)
+  expect(estimateRows(t('a\nb\nc'), 20)).toBe(3)
+  expect(estimateRows(box({ flexDirection: 'column', gap: 1 }, t('a'), t('b'), box({ flexDirection: 'column' })), 20)).toBe(3)
+  expect(estimateRows(box({ flexDirection: 'column', borderStyle: 'round' }, t('a')), 20)).toBe(3)
+  expect(estimateRows(box({ flexDirection: 'row' }, t('[x] '), t('y'.repeat(30))), 20)).toBe(2)
+  expect(estimateRows({ type: 'Button', props: { label: 'Go' }, children: [] }, 20)).toBe(1)
+  expect(estimateRows(box({ flexDirection: 'column', height: 7 }, t('a')), 20)).toBe(7)
+})
+
+// The engine's own pane body comes back from next(e) as an `engine` node, and a
+// Pane refuses one under a Box with a height (seen on 2.1.321 in a real
+// terminal). With no stand-in beneath, the kit hands side-stack that node.
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`footer: pinned with the engine's own node beneath, kept outside the fixed-height box (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    engine(on, {}, false)
+    await start($, surface)
+    await run($, 'footer plan-checklist')
+    const ui = await mountWith($, surface)
+    const root = await rootOf(ui)
+    expect(root.props?.height).toBeUndefined()
+    const pinned = await ui.find({ key: 'stack-pinned' })
+    expect(pinned?.props.height).toBe(20)
+    expect((await ui.find({ key: 'stack-footer' }))?.text).toContain('Plan 2/4')
+    expect(sectionsOf((await ui.findAll({ type: 'Text' })).map(t => t.text))).toEqual(['Ideas', 'Plan 2/4'])
+    await ui.unmount()
   })
 }

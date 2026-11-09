@@ -1,6 +1,6 @@
 {
   "name": "side-stack",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "One side pane that other mods stack their sections into, so assumptions-pane, idea-shelf and plan-checklist show together instead of as separate tabs.",
   "author": {
     "name": "Lucas Saldanha Werneck",

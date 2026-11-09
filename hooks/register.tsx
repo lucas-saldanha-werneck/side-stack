@@ -32,10 +32,14 @@ const ideasStacked = atom({ plugin: 'idea-shelf', key: 'stacked' } as const, fal
 const planStacked = atom({ plugin: 'plan-checklist', key: 'stacked' } as const, false)
 const cleanViewStacked = atom({ plugin: 'clean-view', key: 'stacked' } as const, false)
 
-// The section order: plugin names, or null for install (load) order. Loaded
-// from the settings file into session state so the pane, which reads it while
-// drawing, redraws the moment /stack order changes it.
-const order = atom({ plugin: 'side-stack', key: 'order' } as const, null as string[] | null)
+// Where each section goes: `header` (top), `footer` (bottom) and `order` (the
+// body in between), each a list of plugin names in its own order, or null
+// (empty zone; for `order`, install order). Loaded from the settings file into
+// session state so the pane, which reads it while drawing, redraws the moment
+// /stack order, header or footer changes it.
+export type Zones = { order: string[] | null; header: string[] | null; footer: string[] | null }
+const NO_ZONES: Zones = { order: null, header: null, footer: null }
+const zones = atom({ plugin: 'side-stack', key: 'zones' } as const, NO_ZONES as Zones)
 
 // v4 keys: a guest wraps its section in a Box keyed SECTION + name; for an
 // ordered guest side-stack did not find beneath it, it leaves an empty Box keyed
@@ -50,15 +54,19 @@ export const CONFIG_EXAMPLE = `{
     "about": "Your side-stack settings. Plugin updates never touch this file. null means the default. Keys that start with _ are ignored.",
     "title": "The pane's title. Default: \\"Stack\\".",
     "open_on_start": "Open the pane by itself when a session starts (true or false). Default: true. /stack opens it either way.",
-    "order": "The order of the sections, as a list of plugin names, e.g. [\\"plan-checklist\\", \\"idea-shelf\\"]. Default: install order. /stack order a,b,c sets it, /stack order reset clears it."
+    "order": "The order of the body (the sections between header and footer), as a list of plugin names, e.g. [\\"plan-checklist\\", \\"idea-shelf\\"]. Default: install order. /stack order a,b,c sets it (numbers from /stack order work too), /stack order reset clears order, header and footer.",
+    "header": "Sections shown at the top, in this order, as a list of plugin names. Default: none. /stack header a,b sets it, /stack header none empties it.",
+    "footer": "Sections shown at the bottom, in this order, as a list of plugin names. Docked with room to spare, they stay at the bottom of the pane. Default: none. /stack footer a,b sets it, /stack footer none empties it."
   },
   "title": null,
   "open_on_start": null,
-  "order": null
+  "order": null,
+  "header": null,
+  "footer": null
 }
 `
 
-type Config = { title: string; openOnStart: boolean; order: string[] | null }
+type Config = { title: string; openOnStart: boolean; zones: Zones }
 
 // Windows does not set HOME unless a shell like Git Bash does; it sets USERPROFILE.
 const home = async ($: EngineInterface): Promise<string | undefined> => {
@@ -103,15 +111,23 @@ export const cleanOrder = (v: unknown): string[] | null => {
   return names.length > 0 ? names : null
 }
 
+// Each name in one zone only: header first, then footer, then the body order.
+export const cleanZones = (v: { order?: unknown; header?: unknown; footer?: unknown }): Zones => {
+  const header = cleanOrder(v.header)
+  const footer = cleanOrder(cleanOrder(v.footer)?.filter(n => !header?.includes(n)))
+  const order = cleanOrder(cleanOrder(v.order)?.filter(n => !header?.includes(n) && !footer?.includes(n)))
+  return { order, header, footer }
+}
+
 const readConfig = async ($: EngineInterface): Promise<Config> => {
-  const cfg: Config = { title: DEFAULT_TITLE, openOnStart: true, order: null }
+  const cfg: Config = { title: DEFAULT_TITLE, openOnStart: true, zones: NO_ZONES }
   try {
     const file = await settingsFile($)
     if (file === undefined) return cfg
     const raw: unknown = JSON.parse(await $.fs.read(file))
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return cfg
-    const { title, open_on_start, order: names } = raw as Record<string, unknown>
-    cfg.order = cleanOrder(names)
+    const { title, open_on_start, order, header, footer } = raw as Record<string, unknown>
+    cfg.zones = cleanZones({ order, header, footer })
     if (typeof title === 'string') {
       const clean = cleanTitle(title)
       if (clean !== '') cfg.title = clean
@@ -174,18 +190,20 @@ export const extractSections = (node: unknown): { sections: Map<string, unknown>
 // `/stack order` to accept and list. A module value: it only feeds the
 // command's answer, never a drawing.
 const seen = new Set<string>()
+// The v4 sections found beneath at the last drawing, in the order met (install
+// order), so /stack order can number them as they show. Command answers only.
+let lastBeneath: string[] = []
 
-// A known guest says it draws into the stack. A guest whose command is listed
-// but that does not draw (a version without side-stack support) does not count.
-const guestStacked = async ($: EngineInterface): Promise<boolean> => {
-  // Every flag is read (no early return), so the drawing follows each of them.
+// Each known guest's `stacked` flag. Every flag is read (no early return), so
+// a drawing that reads them follows each of them.
+const stackedFlags = async ($: EngineInterface): Promise<Record<string, boolean>> => {
   const flags = await Promise.all([
     read($, assumptionsStacked).catch(() => false),
     read($, ideasStacked).catch(() => false),
     read($, planStacked).catch(() => false),
     read($, cleanViewStacked).catch(() => false),
   ])
-  return flags.some(f => f === true)
+  return { 'assumptions-pane': flags[0] === true, 'idea-shelf': flags[1] === true, 'plan-checklist': flags[2] === true, 'clean-view': flags[3] === true }
 }
 
 // The session id side-stack last set itself up in, kept IN session state.
@@ -197,12 +215,12 @@ const guestStacked = async ($: EngineInterface): Promise<boolean> => {
 // next event (or the pane's next draw) sees the mismatch and sets up again.
 const setUpFor = atom({ plugin: 'side-stack', key: 'setUpFor' } as const, '')
 
-// The section order from the settings file, kept in the module: a real /clear
-// empties session $.state but keeps module values (seen on 2.1.319), so the
-// pane keeps the order after a /clear. undefined = not read yet (a fresh
-// module): the pane reads the file then. Refreshed at each set-up and by
-// /stack order.
-let cachedOrder: string[] | null | undefined
+// The zones from the settings file, kept in the module: a real /clear empties
+// session $.state but keeps module values (seen on 2.1.319), so the pane keeps
+// the order, header and footer after a /clear. undefined = not read yet (a
+// fresh module): the pane reads the file then. Refreshed at each set-up and by
+// /stack order, header and footer.
+let cachedZones: Zones | undefined
 
 const currentSession = async ($: EngineInterface): Promise<string | undefined> => {
   try {
@@ -240,9 +258,9 @@ const setUp = async ($: EngineInterface, id: string | undefined, isStart: boolea
     // already there, or refused
   }
   const cfg = await readConfig($)
-  cachedOrder = cfg.order
+  cachedZones = cfg.zones
   try {
-    await update($, order, () => cfg.order)
+    await update($, zones, () => cfg.zones)
   } catch {
     // install order until the next try
   }
@@ -271,11 +289,27 @@ const resync = async ($: EngineInterface): Promise<void> => {
   await setUp($, id, false)
 }
 
-const known = (current: readonly string[] | null): string[] => [...new Set([...GUESTS, ...seen, ...(current ?? [])])]
+const known = (z: Zones): string[] =>
+  [...new Set([...GUESTS, ...seen, ...(z.header ?? []), ...(z.order ?? []), ...(z.footer ?? [])])]
 
-// Writes `order` into the settings file, keeping every other key. A file that
-// is there but is not a JSON object is left alone (the error says so).
-const saveOrder = async ($: EngineInterface, names: string[] | null): Promise<string | undefined> => {
+// Every known name by zone, numbered top to bottom as the pane shows them:
+// the header, then the body (guests drawn above side-stack and not listed, the
+// listed order, the rest drawn beneath in install order, then names not
+// drawing now), then the footer.
+export const numbered = (z: Zones, flags: Record<string, boolean>, beneath: readonly string[]): { header: string[]; body: string[]; footer: string[] } => {
+  const header = z.header ?? []
+  const footer = z.footer ?? []
+  const listed = (z.order ?? []).filter(n => !header.includes(n) && !footer.includes(n))
+  const rest = known(z).filter(n => !header.includes(n) && !footer.includes(n) && !listed.includes(n))
+  const above = rest.filter(n => flags[n] === true && !beneath.includes(n))
+  const drawn = beneath.filter(n => rest.includes(n) && !above.includes(n))
+  const others = rest.filter(n => !above.includes(n) && !drawn.includes(n))
+  return { header, body: [...above, ...listed, ...drawn, ...others], footer }
+}
+
+// Writes the zones into the settings file, keeping every other key. A file
+// that is there but is not a JSON object is left alone (the error says so).
+const saveZones = async ($: EngineInterface, z: Zones): Promise<string | undefined> => {
   const file = await settingsFile($)
   if (file === undefined || !isAbsolute(file)) return 'no home folder to keep the settings file in'
   let cfg: Record<string, unknown>
@@ -290,7 +324,9 @@ const saveOrder = async ($: EngineInterface, names: string[] | null): Promise<st
   } catch {
     return `${file} could not be read as JSON; fix it first`
   }
-  cfg.order = names
+  cfg.order = z.order
+  cfg.header = z.header
+  cfg.footer = z.footer
   try {
     await $.fs.write(file, JSON.stringify(cfg, null, 2) + '\n')
   } catch (err) {
@@ -299,41 +335,117 @@ const saveOrder = async ($: EngineInterface, names: string[] | null): Promise<st
   return undefined
 }
 
-// /stack order [a,b,c | reset]: show, set or clear the section order.
-const orderCommand = async ($: EngineInterface, arg: string): Promise<string> => {
-  const current = (await readConfig($)).order
+const HELP =
+  'Change it with /stack order 3,1,2 (the body), /stack header 1 or /stack footer 2 (numbers or names, or a mix), ' +
+  '/stack header none, /stack footer none, or /stack order reset (all back to install order).'
+
+// /stack order|header|footer [list | none | reset]: show the zones, or set one.
+const zoneCommand = async ($: EngineInterface, zone: 'order' | 'header' | 'footer', arg: string): Promise<string> => {
+  const current = (await readConfig($)).zones
+  const flags = await stackedFlags($)
+  const view = numbered(current, flags, lastBeneath)
+  const all = [...view.header, ...view.body, ...view.footer]
   const names = known(current)
-  if (arg === '') {
-    return [
-      `Order: ${current === null ? 'install order (default)' : current.join(', ')}`,
-      `Known: ${names.join(', ')}`,
-      'Change it with /stack order a,b,c or go back with /stack order reset.',
-    ].join('\n')
+  const show = (v: typeof view): string => {
+    let i = 0
+    const shown = (n: string) => flags[n] === true || lastBeneath.includes(n)
+    const group = (label: string, items: string[], empty: string) =>
+      items.length === 0 ? [`${label}: ${empty}`] : [`${label}:`, ...items.map(n => `${++i} · ${n}${shown(n) ? '' : ' (not shown)'}`)]
+    return [...group('Header', v.header, '(empty)'), ...group('Body', v.body, '(empty)'), ...group('Footer', v.footer, '(empty)')].join('\n')
   }
-  let next: string[] | null
-  if (arg === 'reset') {
-    next = null
+  if (arg === '') return `${show(view)}\n${HELP}`
+  let next: Zones
+  if (zone === 'order' && arg === 'reset') {
+    next = NO_ZONES
+  } else if (zone !== 'order' && arg === 'none') {
+    next = { ...current, [zone]: null }
   } else {
-    const asked = arg.split(/[\s,]+/).map(n => n.trim()).filter(n => n !== '')
-    const unknown = asked.filter(n => !names.includes(n))
-    if (unknown.length > 0) return `Not changed: unknown ${unknown.join(', ')}. Known: ${names.join(', ')}`
-    next = cleanOrder(asked)
-    if (next === null) return `Not changed: no names given. Known: ${names.join(', ')}`
+    const asked: string[] = []
+    for (const word of arg.split(/[\s,]+/).filter(w => w !== '')) {
+      if (/^\d+$/.test(word)) {
+        const n = Number(word)
+        if (n < 1 || n > all.length) return `Not changed: no item ${word} (1 to ${all.length}).\n${show(view)}`
+        asked.push(all[n - 1]!)
+      } else if (names.includes(word)) {
+        asked.push(word)
+      } else {
+        return `Not changed: unknown ${word}. Known: ${names.join(', ')}`
+      }
+    }
+    const list = cleanOrder(asked)
+    if (list === null) return `Not changed: nothing given. Known: ${names.join(', ')}`
+    // The listed items leave whatever zone they were in.
+    const drop = (z: string[] | null) => cleanOrder((z ?? []).filter(n => !list.includes(n)))
+    next = { order: drop(current.order), header: drop(current.header), footer: drop(current.footer), [zone]: list }
   }
-  const failed = await saveOrder($, next)
+  const failed = await saveZones($, next)
   if (failed !== undefined) return `Not changed: ${failed}`
-  cachedOrder = next
+  cachedZones = next
   try {
-    await update($, order, () => next)
+    await update($, zones, () => next)
   } catch {
     // saved and cached; the redraw below still shows it
   }
   $.ui.invalidate('ui.render')
-  return next === null ? 'Order: install order (default).' : `Order: ${next.join(', ')}. Sections not listed follow in install order.`
+  const done =
+    next === NO_ZONES ? 'Reset: install order, no header, no footer.'
+    : zone === 'order' ? `Order: ${(next.order ?? []).join(', ')}. Sections not listed follow in install order.`
+    : next[zone] === null ? `${zone === 'header' ? 'Header' : 'Footer'}: empty; its sections are back in the body.`
+    : `${zone === 'header' ? 'Header' : 'Footer'}: ${(next[zone] ?? []).join(', ')}.`
+  return `${done}\n${show(numbered(next, flags, lastBeneath))}`
+}
+
+// Rows a tree takes in `columns` cells, estimated from its shape and text.
+// Used only to tell whether everything fits so the footer can be pinned; it
+// errs on the high side (a row of several pieces counts as its text laid out
+// end to end, or its tallest piece), because a high guess only means "do not
+// pin", while a low one would cut rows off.
+export const estimateRows = (node: unknown, columns: number): number => {
+  const width = Math.max(1, columns)
+  const wrap = (text: string, truncate: boolean): number =>
+    text === '' ? 0 : text.split('\n').reduce((sum, line) => sum + (truncate ? 1 : Math.max(1, Math.ceil(line.length / width))), 0)
+  const textOf = (n: unknown): string => {
+    if (n === null || n === undefined || typeof n === 'boolean') return ''
+    if (typeof n === 'string' || typeof n === 'number') return String(n)
+    if (Array.isArray(n)) return n.map(textOf).join('')
+    if (typeof n !== 'object') return ''
+    const el = n as Node
+    const label = el.props?.label ?? el.props?.text ?? el.props?.value ?? el.props?.source
+    return (typeof label === 'string' ? label : '') + textOf(el.children)
+  }
+  const num = (v: unknown): number => (typeof v === 'number' && v > 0 ? v : 0)
+  const rows = (n: unknown): number => {
+    if (n === null || n === undefined || typeof n === 'boolean') return 0
+    if (typeof n === 'string' || typeof n === 'number') return wrap(String(n), false)
+    if (Array.isArray(n)) return n.reduce((sum: number, c) => sum + rows(c), 0)
+    if (typeof n !== 'object') return 0
+    const el = n as Node
+    const p = el.props ?? {}
+    if (typeof p.height === 'number') return p.height
+    const kids = (el.children ?? []).filter(c => hasContent(c) || (c !== null && typeof c === 'object' && typeof (c as Node).props?.height === 'number'))
+    if (el.type === 'Text') {
+      const truncate = typeof p.wrap === 'string' && p.wrap.startsWith('truncate')
+      return wrap(textOf(el.children), truncate)
+    }
+    if (el.type !== 'Box') return Math.max(1, wrap(textOf(el), false)) + (p.borderStyle !== undefined ? 2 : 0)
+    const edges =
+      num(p.padding) * 2 + num(p.paddingY) * 2 + num(p.paddingTop) + num(p.paddingBottom) +
+      num(p.margin) * 2 + num(p.marginY) * 2 + num(p.marginTop) + num(p.marginBottom) +
+      (p.borderStyle !== undefined ? 2 : 0)
+    if (p.flexDirection === 'row' || p.flexDirection === 'row-reverse') {
+      if (kids.length === 0) return edges
+      return edges + Math.max(wrap(textOf(kids), false), ...kids.map(rows))
+    }
+    const gap = num(p.gap) + num(p.rowGap)
+    return edges + kids.reduce((sum: number, c) => sum + rows(c), 0) + gap * Math.max(0, kids.length - 1)
+  }
+  return rows(node)
 }
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    // A new session: nothing drawn in it yet.
+    lastBeneath = []
     await seedSettings($)
     await setUp($, await currentSession($), true)
     return next(e)
@@ -372,8 +484,13 @@ export const register: Register = on => {
     if (e.command !== 'stack') return next(e)
     const cfg = await readConfig($)
     const words = e.args.trim().split(/\s+/).filter(w => w !== '')
-    if (words[0] === 'order') return { text: await orderCommand($, e.args.trim().slice(5).trim()) }
-    if (words.length > 0) return { text: 'Usage: /stack (open the pane), /stack order, /stack order a,b,c, /stack order reset' }
+    const first = words[0]
+    if (first === 'order' || first === 'header' || first === 'footer') {
+      return { text: await zoneCommand($, first, e.args.trim().slice(first.length).trim()) }
+    }
+    if (words.length > 0) {
+      return { text: 'Usage: /stack (open the pane), /stack order (show the sections, numbered), /stack order 3,1,2, /stack header 1, /stack footer 2, /stack header none, /stack footer none, /stack order reset' }
+    }
     // Another plugin asking for the pane (to bring a section forward) gets the
     // outcome as a value and nothing is printed: in a headless run
     // (`claude -p`) a printed line would land in the run's output.
@@ -400,36 +517,90 @@ export const register: Register = on => {
     const below: RenderElement = await next(e)
     const { sections, rest } = extractSections(below)
     for (const name of sections.keys()) seen.add(name)
+    lastBeneath = [...sections.keys()]
     // Read for the subscription (a change redraws the pane); the module copy
     // is what counts, since session state is empty after a /clear.
-    const fromState = await read($, order)
-    if (cachedOrder === undefined) cachedOrder = (await readConfig($)).order ?? fromState
-    const wanted = cachedOrder
+    const fromState = await read($, zones)
+    if (cachedZones === undefined) {
+      const fromFile = (await readConfig($)).zones
+      cachedZones = fromFile.order !== null || fromFile.header !== null || fromFile.footer !== null ? fromFile : fromState
+    }
+    const z = cachedZones
     // A guest loaded before side-stack draws above this hook, out of its sight;
     // its `stacked` flag tells that it draws.
-    const filled = hasContent(below) || (await guestStacked($))
-    if (wanted !== null) {
-      // The ordered names first: the section found beneath, or an empty slot a
-      // guest above fills. Then v4 sections not listed, then everything else
-      // (guests without the v4 key), each in install order.
-      const parts: unknown[] = wanted.map(name => {
-        const found = sections.get(name)
-        if (found === undefined) return <Box key={SLOT + name} flexDirection="column" />
-        sections.delete(name)
-        return found
-      })
+    const flags = await stackedFlags($)
+    const filled = hasContent(below) || Object.values(flags).some(f => f)
+    if (!filled) {
+      return (
+        <Box flexDirection="column">
+          {below}
+          <Text dimColor>Install {GUESTS.slice(0, -1).join(', ')} or {GUESTS.at(-1)} to fill this pane:</Text>
+          {GUESTS.map(name => (
+            <Text dimColor>/plugin install {name} --marketplace lucas-saldanha-werneck/{name}</Text>
+          ))}
+        </Box>
+      )
+    }
+    // The section found beneath, or an empty slot a guest above fills.
+    const take = (name: string): unknown => {
+      const found = sections.get(name)
+      if (found === undefined) return <Box key={SLOT + name} flexDirection="column" />
+      sections.delete(name)
+      return found
+    }
+    if (z.header === null && z.footer === null) {
+      if (z.order === null) return <Box flexDirection="column">{below}</Box>
+      // The ordered names first, then v4 sections not listed, then everything
+      // else (guests without the v4 key), each in install order.
+      const parts: unknown[] = z.order.map(take)
       parts.push(...sections.values(), ...rest)
-      if (filled) return <Box flexDirection="column">{parts as RenderElement[]}</Box>
-    } else if (filled) {
-      return <Box flexDirection="column">{below}</Box>
+      return <Box flexDirection="column">{parts as RenderElement[]}</Box>
+    }
+    // Zones. Known guests drawn above side-stack and listed nowhere get a slot
+    // at the top of the body, where they would show with no zones at all (they
+    // would otherwise draw above the header).
+    const listed = new Set([...(z.header ?? []), ...(z.order ?? []), ...(z.footer ?? [])])
+    const aboveSlots = GUESTS.filter(n => !listed.has(n) && !sections.has(n)).map(take)
+    // Size unknown: a known guest drawing above side-stack (its section lands in
+    // a slot, or around this whole tree, after this hook returns).
+    const unknownSize = GUESTS.some(n => flags[n] && !sections.has(n))
+    const header = (z.header ?? []).map(take)
+    const footer = (z.footer ?? []).map(take)
+    // The engine's own drawing of the pane (an `engine` node) may not sit under
+    // a Box with a height: when pinned it goes after the fixed-height box.
+    const isEngine = (n: unknown) => n !== null && typeof n === 'object' && (n as Node).type === 'engine'
+    const engineNodes = rest.filter(isEngine)
+    const others = rest.filter(n => !isEngine(n))
+    const body = [...aboveSlots, ...(z.order ?? []).map(take), ...sections.values(), ...others]
+    const headerBox = <Box key="stack-header" flexDirection="column">{header as RenderElement[]}</Box>
+    const bodyBox = <Box key="stack-body" flexDirection="column">{body as RenderElement[]}</Box>
+    const bodyWithEngine = <Box key="stack-body" flexDirection="column">{[...body, ...engineNodes] as RenderElement[]}</Box>
+    const footerBox = <Box key="stack-footer" flexDirection="column" flexShrink={0}>{footer as RenderElement[]}</Box>
+    // The footer is pinned to the bottom of a docked pane while everything
+    // fits its room; otherwise one plain column that scrolls, nothing cut.
+    const room = e.props.scroll?.bodyRows ?? 0
+    const isPinned =
+      e.props.placement === 'dock' && room > 0 && !unknownSize && hasContent(footer) &&
+      estimateRows([header, body, footer], e.props.bodyColumns) <= room
+    if (!isPinned) {
+      return (
+        <Box flexDirection="column">
+          {headerBox}
+          {bodyWithEngine}
+          {footerBox}
+        </Box>
+      )
     }
     return (
       <Box flexDirection="column">
-        {below}
-        <Text dimColor>Install {GUESTS.slice(0, -1).join(', ')} or {GUESTS.at(-1)} to fill this pane:</Text>
-        {GUESTS.map(name => (
-          <Text dimColor>/plugin install {name} --marketplace lucas-saldanha-werneck/{name}</Text>
-        ))}
+        <Box key="stack-pinned" flexDirection="column" height={room}>
+          <Box key="stack-top" flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">
+            {headerBox}
+            {bodyBox}
+          </Box>
+          {footerBox}
+        </Box>
+        {engineNodes as RenderElement[]}
       </Box>
     )
   })

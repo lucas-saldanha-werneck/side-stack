@@ -85,7 +85,10 @@ Each guest works alone too. Without side-stack, it opens its own pane and its ow
     it has not been tried by hand in the app.
 - `/stack` opens it at any width, on both.
 - Sections show in install (load) order unless you set an order: see [Order](#order).
-- `/stack order` shows the order; `/stack order a,b,c` changes it; `/stack order reset` goes back.
+- `/stack order` shows the sections numbered, grouped as Header, Body and Footer.
+- `/stack order 3,1,2` orders the body; `/stack header 1` and `/stack footer 2` move sections to the
+  top or the bottom, each zone in its own order; `/stack header none` and `/stack footer none` empty
+  a zone; `/stack order reset` puts everything back. Numbers, names, or a mix (`plan-checklist,2`).
 
 ## Settings
 
@@ -97,24 +100,61 @@ updates never touch it.
 | --- | --- | --- |
 | `title` | `"Stack"` | The pane's title. |
 | `open_on_start` | `true` | Open the pane by itself at session start. `/stack` opens it either way. |
-| `order` | install order | The order of the sections, as a list of plugin names. See [Order](#order). |
+| `order` | install order | The order of the body (between header and footer), as a list of plugin names. See [Order](#order). |
+| `header` | `null` (none) | Sections shown at the top, in this order. See [Header and footer](#header-and-footer). |
+| `footer` | `null` (none) | Sections shown at the bottom, in this order. See [Header and footer](#header-and-footer). |
 
 ## Order
 
 By default the sections follow install (load) order: the plugins load in an order the engine picks,
-and that order is what you see. To change it:
+and that order is what you see. `/stack order` lists every section side-stack knows (the four
+guests below, plus any other plugin whose section it has seen in the pane), numbered top to bottom
+and grouped as Header, Body and Footer; a name not drawing now is marked `(not shown)`:
 
 ```
-/stack order plan-checklist,assumptions-pane,idea-shelf
+Header: (empty)
+Body:
+1 · plan-checklist
+2 · idea-shelf
+3 · assumptions-pane (not shown)
+4 · clean-view (not shown)
+Footer: (empty)
 ```
 
-The pane redraws at once, and the order is saved as `order` in the settings file, so the next
-session uses it too. Plugins you leave out follow the listed ones, in install order. Other commands:
+To change the order of the body, list the numbers, the names, or a mix:
 
-- `/stack order` shows the current order and the names side-stack knows (the four guests below,
-  plus any other plugin whose section it has seen in the pane).
-- `/stack order reset` goes back to install order (`order` becomes `null`).
-- An unknown name changes nothing; the answer lists the known names.
+```
+/stack order 2,1
+/stack order idea-shelf,1
+```
+
+The numbers are the ones `/stack order` showed last (run it again after a change: they move). The
+pane redraws at once, and the order is saved as `order` in the settings file, so the next session
+uses it too. Plugins you leave out follow the listed ones, in install order. Other commands:
+
+- `/stack order reset` goes back to install order and empties the header and the footer (`order`,
+  `header` and `footer` become `null`).
+- An unknown name, or a number with no section, changes nothing; the answer lists what is known.
+
+## Header and footer
+
+```
+/stack header 3          # section 3 at the top
+/stack footer 1,4        # sections 1 and 4 at the bottom, in that order
+/stack header none       # the header's sections go back to the body
+/stack footer none
+```
+
+Each list replaces that zone and keeps its own order; a section you move leaves the zone it was in.
+They are saved as `header` and `footer` in the settings file (`null` = empty). The pane shows the
+header on top, then the body, then the footer.
+
+With the pane docked beside the transcript (fullscreen terminal) and everything fitting its height,
+the footer stays at the bottom of the pane and the space is left between body and footer. When the
+sections do not fit, the pane is inline (above the prompt), or a guest loaded before side-stack draws
+in the pane (side-stack cannot measure its section, see below), the zones show as one plain column
+that scrolls, so no row is ever cut off. Whether everything fits is an estimate from the sections'
+text and layout, made on the high side: in doubt the footer is not pinned.
 
 How it works: in the drawing chain, plugins loaded earlier wrap the ones loaded later. side-stack
 takes each guest's section out of what is drawn beneath it and puts them back in your order. For a
@@ -220,12 +260,14 @@ One hooks module (`hooks/register.tsx`). At session start it sets the `present` 
 settings file if missing, registers `/stack` and opens the pane. It remembers that session's id; the
 first event under another id (after a `/clear`) does the same again, without rewriting the settings
 file and without opening a second pane. Its `ui.render` hook on the pane
-calls `next(e)`; with no order set it returns what that gives inside its own Box, and with one it
-rearranges the v4 sections and leaves slots as described under [Order](#order). It keeps the order
-from the settings file in the module (read at session start, after a `/clear` and by `/stack
-order`), because a real `/clear` empties session state but keeps module values; `/stack order`
-also redraws the pane at once. An order you type into the file by hand takes effect at the next
-session start or `/clear`. It adds the install hint only when
+calls `next(e)`; with no order, header or footer set it returns what that gives inside its own Box,
+and with them it rearranges the v4 sections into the three zones and leaves slots as described under
+[Order](#order) (with a header or footer, a known guest loaded before side-stack and listed nowhere
+gets a slot at the top of the body, where it would show anyway). It keeps the zones from the settings
+file in the module (read at session start, after a `/clear` and by `/stack order`, `header` and
+`footer`), because a real `/clear` empties session state but keeps module values; those commands
+also redraw the pane at once. Zones you type into the file by hand take effect at the next session
+start or `/clear`; a name listed in two zones stays in the first of header, footer, order. It adds the install hint only when
 nothing visible came back and no known guest's `stacked` flag is `true`. A pane title from the
 settings file is cleaned of control characters (line breaks, tabs, escapes) and cut at 60
 characters; `/stack` answers with a line instead of failing when the pane cannot open.
@@ -263,6 +305,12 @@ Guests go back to their own panes from the next session.
   host, three orders). side-stack's own ordering code and the `/stack order` command are covered by
   the tests (terminal and desktop) but have not been tried by hand with the real guests, and not at
   all in the desktop app.
+- Header, footer and item numbers (0.4.0) are covered by the tests (terminal and desktop), including
+  the pinned and the plain footer layouts as trees. Tried by hand in a real terminal (Claude Code
+  2.1.321, 220x60, the four guests): `/stack header 1` then `/stack footer 2` put idea-shelf on top
+  and assumptions-pane pinned at the bottom of the docked pane. That run found that the engine
+  refuses its own node (what `next(e)` returns at the bottom) under a Box with a height, so side-stack
+  keeps it outside the pinned box; a test covers it. Not checked in the desktop app.
 
 ## Credits
 
