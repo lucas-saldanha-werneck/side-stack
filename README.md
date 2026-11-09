@@ -70,10 +70,19 @@ Each guest works alone too. Without side-stack, it opens its own pane and its ow
 
 ## Use
 
-- The pane opens by itself when a session starts. In a terminal it only opens by itself when the
-  window is at least 144 columns wide (the engine's rule for panes nobody asked for). Below that it
-  waits.
-- `/stack` opens it at any width.
+- The pane opens by itself when a session starts, in the terminal and in the desktop app. side-stack
+  makes the same call on both; where the pane goes is the engine's choice:
+  - **Terminal:** a pane opened unasked (from session start) is placed only when the window is at
+    least 144 columns wide, or 110 once you have opened it yourself and not closed it by hand since.
+    Below that it waits, undrawn, until the window widens or you run `/stack`. Docked beside the
+    transcript in fullscreen mode, otherwise inline above the prompt.
+  - **Desktop app:** the column floor is written as terminal columns in the API types (Claude Code
+    2.1.319, `PaneOpenArgs` and `UiOpenResult`), and they say a remote surface that reports it
+    places panes has `$.ui.open` placed there. So in the app the pane is expected to open at start
+    with no width rule, as one tab among any other panes. If the app has not attached yet when the
+    session starts, the pane stays open and is drawn once it attaches. This comes from the types;
+    it has not been tried by hand in the app.
+- `/stack` opens it at any width, on both.
 - Sections show in plugin load order, the engine's. A mod cannot change that order.
 
 ## Settings
@@ -144,8 +153,9 @@ The protocol, version 2:
    `$.command.run` is queued and runs once the session is idle, shows its line in the transcript
    ("Stack pane opened."), and rejects when called inside a hook the turn or session start waits
    on, so do not await it there. Whether a pane opened from a plugin-run command counts as "asked"
-   (placed at any width) or follows the 144-column rule has not been checked; if it does not show,
-   fall back to your own pane.
+   (placed at any width) has not been tried. The types list "a queued prompt" among the things that
+   are not asking, so in the terminal expect the 144-column rule; if it does not show, fall back to
+   your own pane.
 6. **side-stack absent:** behave as you do alone: your own pane, your own tab.
 
 ## How it works
@@ -173,6 +183,9 @@ Guests go back to their own panes from the next session.
   tests stack fake guests loaded before and after side-stack. Two plugins sharing one pane was also
   tried by hand with throwaway mods; side-stack itself with the real guests has not
   been tried by hand yet.
+- The tests draw the pane, the install hint and stacked guests on both the `terminal` and the
+  `desktop` surface (the hint also on `mobile` and `vscode`). The kit checks the trees the mod
+  returns, not how a surface paints them or where it places the pane.
 - Not tested on the mobile app.
 - Whether `$.state` values survive a `/clear` was not checked. `/stack` sets `present` again, so
   running it after a `/clear` restores the flag if it was lost.

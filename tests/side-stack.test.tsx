@@ -73,10 +73,10 @@ const engine = (on: On, have: Record<string, string> = {}, drawsPane = true, ope
   return { writes, opened }
 }
 
-const start = async ($: unknown): Promise<unknown> =>
+const start = async ($: unknown, surface: 'terminal' | 'desktop' = 'terminal'): Promise<unknown> =>
   ($ as { session: { start: (e: never) => Promise<unknown> } }).session.start({
     cwd: '/work',
-    surface: 'terminal',
+    surface,
     isInteractive: true,
   } as never)
 
@@ -107,10 +107,15 @@ test('session start sets the present flag for guests to read', { plugins: [READE
   expect(JSON.stringify(after)).toContain('present=true')
 })
 
-test('session start opens the Stack pane by itself', async ($, on) => {
+test('session start opens the Stack pane by itself, in the terminal and the desktop app', async ($, on) => {
   const { opened } = engine(on)
-  await start($)
-  expect(opened).toEqual([expect.objectContaining({ id: 'side-stack', title: 'Stack' })])
+  await start($, 'terminal')
+  await start($, 'desktop')
+  // The same call on both; where it is placed is the engine's (see README).
+  expect(opened).toEqual([
+    expect.objectContaining({ id: 'side-stack', title: 'Stack' }),
+    expect.objectContaining({ id: 'side-stack', title: 'Stack' }),
+  ])
 })
 
 test('/stack opens the pane', async ($, on) => {
@@ -177,10 +182,12 @@ test('the host keeps what is drawn beneath it (next(e)) inside its own tree', as
     const { Text } = $.ui.resolve(e)
     return <Text>BELOW</Text>
   })
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: 'BELOW' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /to fill this pane/ })).toBeUndefined()
-  await ui.unmount()
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Text', text: 'BELOW' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /to fill this pane/ })).toBeUndefined()
+    await ui.unmount()
+  }
 })
 
 test('a guest loaded after side-stack draws its section in the same pane', {
@@ -236,13 +243,15 @@ test('two guests, one on each side of side-stack, stack in one pane in load orde
 }, async ($, on) => {
   engine(on)
   await start($)
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
-  expect(texts).toContain('Assumptions')
-  expect(texts).toContain('Plan 2/4')
-  expect(texts.indexOf('Assumptions')).toBeLessThan(texts.indexOf('Plan 2/4'))
-  expect(texts.some(t => /to fill this pane/.test(t))).toBe(false)
-  await ui.unmount()
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+    expect(texts).toContain('Assumptions')
+    expect(texts).toContain('Plan 2/4')
+    expect(texts.indexOf('Assumptions')).toBeLessThan(texts.indexOf('Plan 2/4'))
+    expect(texts.some(t => /to fill this pane/.test(t))).toBe(false)
+    await ui.unmount()
+  }
 })
 
 test('a guest loaded before side-stack that says it is stacked hides the install hint', {
@@ -264,10 +273,12 @@ test('a guest loaded before side-stack that says it is stacked hides the install
 }, async ($, on) => {
   engine(on)
   await start($)
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: 'Assumptions' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /to fill this pane/ })).toBeUndefined()
-  await ui.unmount()
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Text', text: 'Assumptions' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /to fill this pane/ })).toBeUndefined()
+    await ui.unmount()
+  }
 })
 
 test('a guest whose command is listed but that does not draw leaves the hint (no blank pane)', {
@@ -285,9 +296,11 @@ test('a guest whose command is listed but that does not draw leaves the hint (no
 }, async ($, on) => {
   engine(on)
   await start($)
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /to fill this pane/ })).toBeDefined()
-  await ui.unmount()
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Text', text: /to fill this pane/ })).toBeDefined()
+    await ui.unmount()
+  }
 })
 
 test('a guest that stops drawing (stacked back to false) brings the hint back', {
@@ -309,11 +322,13 @@ test('a guest that stops drawing (stacked back to false) brings the hint back', 
 }, async ($, on) => {
   engine(on)
   await start($)
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /to fill this pane/ })).toBeUndefined()
+  const uis = [await $.ui.mount({ ...PANE, surface: 'terminal' }), await $.ui.mount({ ...PANE, surface: 'desktop' })]
+  for (const ui of uis) expect(await ui.find({ type: 'Text', text: /to fill this pane/ })).toBeUndefined()
   await $.command.run({ command: 'unstack', args: '' } as never)
-  expect(await ui.find({ type: 'Text', text: /to fill this pane/ })).toBeDefined()
-  await ui.unmount()
+  for (const ui of uis) {
+    expect(await ui.find({ type: 'Text', text: /to fill this pane/ })).toBeDefined()
+    await ui.unmount()
+  }
 })
 
 test('session.end clears the present flag, except on /clear and resume', { plugins: [READER] }, async ($, on) => {
