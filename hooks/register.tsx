@@ -128,15 +128,83 @@ const guestStacked = async ($: EngineInterface): Promise<boolean> => {
   return flags.some(f => f === true)
 }
 
+// The session id side-stack last set itself up in. A /clear ends the session
+// and the process goes on under a NEW id with no session.start, and session
+// $.state does not carry over, so `present` reads false there. The first event
+// that sees another id sets things up again (resync). A module variable: a hot
+// reload empties it, which costs one extra, harmless resync.
+let setUpIn: string | undefined
+
+const currentSession = async ($: EngineInterface): Promise<string | undefined> => {
+  try {
+    return await $.session.id()
+  } catch {
+    return undefined
+  }
+}
+
+// `/stack` from side-stack is listed in this session.
+const stackListed = async ($: EngineInterface): Promise<boolean> => {
+  try {
+    return (await $.command.list()).some(c => c.name === 'stack' && c.plugin?.split('@')[0] === 'side-stack')
+  } catch {
+    return false
+  }
+}
+
+// Sets `present`, makes sure /stack is listed and, with open_on_start, opens
+// the pane if it is not open. Never throws.
+const setUp = async ($: EngineInterface, id: string | undefined, isStart: boolean): Promise<void> => {
+  setUpIn = id
+  try {
+    await update($, present, () => true)
+  } catch {
+    // keep going: the command and the pane matter more
+  }
+  try {
+    if (isStart || !(await stackListed($))) {
+      await $.command.register({ name: 'stack', description: 'Open the Stack side pane' })
+    }
+  } catch {
+    // already there, or refused
+  }
+  const cfg = await readConfig($)
+  if (!cfg.openOnStart) return
+  try {
+    if (!isStart && (await $.ui.panes()).some(p => p.id === PANE_ID)) return
+    // Unasked, the engine places it only in a wide enough terminal; below that
+    // it waits. Not awaited, so a waiting pane holds nothing up.
+    void $.ui.open({ id: PANE_ID, title: cfg.title }).catch(() => undefined)
+  } catch {
+    // no pane today
+  }
+}
+
+// After a /clear: set up again on the first event under the new session id.
+const resync = async ($: EngineInterface): Promise<void> => {
+  const id = await currentSession($)
+  if (id === undefined || id === setUpIn) return
+  await setUp($, id, false)
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await update($, present, () => true)
     await seedSettings($)
-    await $.command.register({ name: 'stack', description: 'Open the Stack side pane' })
-    const cfg = await readConfig($)
-    // Unasked, the engine places it only in a wide enough terminal; below that
-    // it waits. Not awaited, so a waiting pane does not hold up the session.
-    if (cfg.openOnStart) void $.ui.open({ id: PANE_ID, title: cfg.title }).catch(() => undefined)
+    await setUp($, await currentSession($), true)
+    return next(e)
+  })
+
+  // The first events of a session that began with a /clear.
+  on('prompt.submit', async ($, e, next) => {
+    await resync($)
+    return next(e)
+  })
+  on('turn.start', async ($, e, next) => {
+    await resync($)
+    return next(e)
+  })
+  on('tool.call', async ($, e, next) => {
+    await resync($)
     return next(e)
   })
 
@@ -154,7 +222,9 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('command.run', { command: 'stack' }, async $ => {
+  on('command.run', async ($, e, next) => {
+    await resync($)
+    if (e.command !== 'stack') return next(e)
     const cfg = await readConfig($)
     try {
       await update($, present, () => true)
@@ -167,6 +237,9 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
     const { Box, Text } = $.ui.resolve(e)
+    // A render may not write state: a new session id is set up from a timer.
+    const id = await currentSession($)
+    if (id !== undefined && id !== setUpIn) $.clock.after(0, () => void resync($))
     // Every guest beneath this hook draws its section here. Never skip it.
     const below: RenderElement = await next(e)
     // A guest loaded before side-stack draws above this hook, out of its sight;

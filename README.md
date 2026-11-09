@@ -98,20 +98,26 @@ updates never touch it.
 
 ## How a plugin joins the stack
 
-The protocol, version 2:
+The protocol, version 3:
 
-1. **Is side-stack there?** side-stack sets the session value `{ plugin: 'side-stack', key: 'present' }`
-   to `true` at session start (and again on `/stack`). Any plugin can read it; only side-stack writes
-   it. There is no unload event, so the flag alone can outlive the plugin (uninstalled or disabled
-   mid-session). Treat side-stack as present only when the flag is `true` AND `$.command.list()` lists
-   `stack` whose `plugin`, with any `@marketplace` suffix removed, is `side-stack`. Check again at
-   every point where you would open, close or retitle your own pane (a moment after session start,
-   about a second later, each new item, each of your commands), since load order is unknown.
-   side-stack sets the flag to `false` on `session.end`, except for a `/clear` or a resume: there the
-   process goes on and no new `session.start` fires.
+1. **Is side-stack there?** It is when `$.command.list()` lists `stack` whose `plugin`, with any
+   `@marketplace` suffix removed, is `side-stack`. That alone. Check again at every point where you
+   would open, close or retitle your own pane (a moment after session start, about a second later,
+   each new item, each of your commands, and whenever `$.session.id()` differs from the id you
+   loaded under), since load order is unknown.
+
+   side-stack also keeps the session value `{ plugin: 'side-stack', key: 'present' }` set to `true`,
+   for older guests. Read it as a hint at most, never as a requirement: `$.state` is per session,
+   and a `/clear` ends the session (the process goes on under a new session id, no `session.start`
+   fires), so the value is gone afterwards until side-stack sets it again on the first prompt, turn,
+   command or tool call of the new session.
+
+   After a `/clear`, reload your list from `$.store` when the session id changed (a render hook may
+   not write state: schedule it with `$.clock.after(0, ...)`), then check presence again and set your
+   `stacked` flag again: it was session state too.
 
    Declare the keys you read and write in your own `types/index.d.ts`, with no top-level `export` in
-   that file:
+   that file (`present` only if you read it):
 
    ```ts
    declare module 'claude-code' {
@@ -161,7 +167,9 @@ The protocol, version 2:
 ## How it works
 
 One hooks module (`hooks/register.tsx`). At session start it sets the `present` value, creates the
-settings file if missing, registers `/stack` and opens the pane. Its `ui.render` hook on the pane
+settings file if missing, registers `/stack` and opens the pane. It remembers that session's id; the
+first event under another id (after a `/clear`) does the same again, without rewriting the settings
+file and without opening a second pane. Its `ui.render` hook on the pane
 calls `next(e)` and returns what that gives inside its own Box; it adds the install hint only when
 nothing visible came back and no known guest's `stacked` flag is `true`. A pane title from the
 settings file is cleaned of control characters (line breaks, tabs, escapes) and cut at 60
@@ -187,8 +195,12 @@ Guests go back to their own panes from the next session.
   `desktop` surface (the hint also on `mobile` and `vscode`). The kit checks the trees the mod
   returns, not how a surface paints them or where it places the pane.
 - Not tested on the mobile app.
-- Whether `$.state` values survive a `/clear` was not checked. `/stack` sets `present` again, so
-  running it after a `/clear` restores the flag if it was lost.
+- A real terminal test (Claude Code 2.1.319) showed that session `$.state` does not carry over a
+  `/clear`. side-stack sets `present` again, and opens its pane again (with `open_on_start`, when it
+  is not open), on the first prompt, turn, command or tool call that runs under the new session id,
+  or right after the pane draws under it. A test models that `/clear` (session end, new id, no
+  session start, empty state) on the terminal and desktop surfaces; the fix itself has not been
+  tried by hand yet.
 
 ## Credits
 

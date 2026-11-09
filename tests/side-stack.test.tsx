@@ -380,3 +380,99 @@ test('another pane is left to the engine', async ($, on) => {
   expect((await ui.find({ type: 'Text' }))?.text).toBe('engine')
   await ui.unmount()
 })
+
+// ---- a real /clear: session.end { reason: 'clear' }, a NEW session id, NO
+// session.start, and session $.state that does not carry over.
+
+// A guest written to the v2 rules an older guest follows: it draws into the
+// stack only while side-stack's `present` is true AND /stack is listed, keeps
+// its list in $.store, and checks again on each prompt whether the session id
+// changed since it last looked.
+const OLD_GUEST = {
+  name: 'idea-shelf',
+  tier: 'append' as const,
+  register(on: On) {
+    // (The module scan wants $ spelled at each call site, so the check is
+    // written out in both hooks.)
+    let seenIn: string | undefined
+    on('session.start', async ($, e, next) => {
+      await $.command.register({ name: 'ideas', description: 'Ideas' })
+      const ran = await next(e)
+      seenIn = await $.session.id()
+      const { value: present } = await $.state.get({ plugin: 'side-stack', key: 'present' })
+      const listed = (await $.command.list()).some(c => c.name === 'stack' && c.plugin?.split('@')[0] === 'side-stack')
+      await $.state.set({ plugin: 'idea-shelf', key: 'stacked' }, present === true && listed)
+      return ran
+    })
+    on('prompt.submit', async ($, e, next) => {
+      const id = await $.session.id()
+      if (id !== seenIn) {
+        seenIn = id
+        const { value: present } = await $.state.get({ plugin: 'side-stack', key: 'present' })
+        const listed = (await $.command.list()).some(c => c.name === 'stack' && c.plugin?.split('@')[0] === 'side-stack')
+        await $.state.set({ plugin: 'idea-shelf', key: 'stacked' }, present === true && listed)
+      }
+      return next(e)
+    })
+    on('ui.render', { component: 'Pane', requestId: 'side-stack' }, async ($, e, next) => {
+      const { Box, Text } = $.ui.resolve(e)
+      const { value: stacked } = await $.state.get({ plugin: 'idea-shelf', key: 'stacked' })
+      if (stacked !== true) return next(e)
+      const items = ((await $.store.get('ideas')) ?? []) as string[]
+      return <Box flexDirection="column"><Text>Ideas</Text>{items.map(i => <Text>{i}</Text>)}{await next(e)}</Box>
+    })
+  },
+}
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`after a real /clear the guest's list is back in the stack (${surface})`, { plugins: [OLD_GUEST] }, async ($, on) => {
+    const { opened } = engine(on, {}, true)
+    mock.store(on, { ideas: ['one idea'] })
+    // Session $.state, one map per session id: a new id starts empty.
+    let sid = 's1'
+    const state: Record<string, Record<string, { value: unknown; version: number }>> = {}
+    on('session.id', async () => ({ value: sid }) as never)
+    on('state.get', async (_$, e) => {
+      const a = e as { plugin: string; key: string }
+      return { value: state[sid]?.[`${a.plugin}.${a.key}`] ?? { value: undefined, version: 0 } } as never
+    })
+    on('state.set', async (_$, e) => {
+      const a = e as { plugin: string; key: string; value: unknown }
+      const box = (state[sid] ??= {})
+      const version = (box[`${a.plugin}.${a.key}`]?.version ?? 0) + 1
+      box[`${a.plugin}.${a.key}`] = { value: a.value, version }
+      return { value: { isSet: true, version } } as never
+    })
+    on('session.end', async (_$, e) => ({ sessionId: (e as { sessionId: string }).sessionId }) as never)
+    on('prompt.submit', async (_$, e) => ({ text: (e as { text: string }).text }) as never)
+    // The pane the /clear left behind is gone from the engine's record here,
+    // so side-stack opens it again.
+    on('ui.panes', async () => ({ value: [] }) as never)
+
+    const draw = async () => {
+      const ui = await $.ui.mount({ ...PANE, surface })
+      const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+      await ui.unmount()
+      return texts
+    }
+
+    await start($, surface)
+    expect(await draw()).toEqual(expect.arrayContaining(['Ideas', 'one idea']))
+    expect(opened).toHaveLength(1)
+
+    // /clear: the session ends, the process goes on under a new id, no session.start.
+    const s = $ as unknown as { session: { end: (e: never) => Promise<unknown> }; prompt: { submit: (e: never) => Promise<unknown> } }
+    await s.session.end({ reason: 'clear', sessionId: 's1', resume: {} } as never)
+    sid = 's2'
+    // Without a new event the new session has nothing: the guest is not stacked.
+    expect(await draw()).not.toContain('Ideas')
+
+    // The first prompt after the /clear.
+    await s.prompt.submit({ text: 'go on', origin: { kind: 'composer' } } as never)
+    const texts = await draw()
+    expect(texts).toEqual(expect.arrayContaining(['Ideas', 'one idea']))
+    expect(texts.some(t => /to fill this pane/.test(t))).toBe(false)
+    expect(state.s2?.['side-stack.present']?.value).toBe(true)
+    expect(opened).toHaveLength(2)
+  })
+}
