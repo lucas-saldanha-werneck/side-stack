@@ -188,12 +188,14 @@ const guestStacked = async ($: EngineInterface): Promise<boolean> => {
   return flags.some(f => f === true)
 }
 
-// The session id side-stack last set itself up in. A /clear ends the session
-// and the process goes on under a NEW id with no session.start, and session
-// $.state does not carry over, so `present` reads false there. The first event
-// that sees another id sets things up again (resync). A module variable: a hot
-// reload empties it, which costs one extra, harmless resync.
-let setUpIn: string | undefined
+// The session id side-stack last set itself up in, kept IN session state.
+// A /clear ends the session: the process goes on under a NEW id with no
+// session.start, and session $.state is emptied, but events can reach a mod
+// under the new id BEFORE that happens (seen on 2.1.319). A marker in a
+// module variable set in that window would outlive the emptying and nothing
+// would set things up again; one in $.state is emptied with the rest, so the
+// next event (or the pane's next draw) sees the mismatch and sets up again.
+const setUpFor = atom({ plugin: 'side-stack', key: 'setUpFor' } as const, '')
 
 // The section order from the settings file, kept in the module: a real /clear
 // empties session $.state but keeps module values (seen on 2.1.319), so the
@@ -224,9 +226,9 @@ const stackListed = async ($: EngineInterface): Promise<boolean> => {
 const setUp = async ($: EngineInterface, id: string | undefined, isStart: boolean): Promise<void> => {
   try {
     await update($, present, () => true)
-    // Only a set-up whose write landed counts: one that was refused (say, from
+    // Only a set-up whose writes landed counts: one that was refused (say, from
     // a context that may not write) is tried again on the next event.
-    setUpIn = id
+    await update($, setUpFor, () => id ?? '')
   } catch {
     // keep going: the command and the pane matter more
   }
@@ -258,7 +260,14 @@ const setUp = async ($: EngineInterface, id: string | undefined, isStart: boolea
 // After a /clear: set up again on the first event under the new session id.
 const resync = async ($: EngineInterface): Promise<void> => {
   const id = await currentSession($)
-  if (id === undefined || id === setUpIn) return
+  if (id === undefined) return
+  let done = ''
+  try {
+    done = await read($, setUpFor)
+  } catch {
+    // unreadable: set up again, it is harmless
+  }
+  if (id === done) return
   await setUp($, id, false)
 }
 
@@ -378,7 +387,9 @@ export const register: Register = on => {
     const { Box, Text } = $.ui.resolve(e)
     // A render may not write state: a new session id is set up from a timer.
     const id = await currentSession($)
-    if (id !== undefined && id !== setUpIn) $.clock.after(0, () => void resync($))
+    // Read while drawing, so the emptying of state at a /clear redraws the pane.
+    const done = await read($, setUpFor).catch(() => '')
+    if (id !== undefined && id !== done) $.clock.after(0, () => void resync($))
     // Every guest beneath this hook draws its section here. Never skip it.
     const below: RenderElement = await next(e)
     const { sections, rest } = extractSections(below)

@@ -731,3 +731,38 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Ideas', 'Plan 2/4'])
   })
 }
+
+// The race seen on 2.1.319: after a /clear, events can reach the mod under the
+// NEW session id BEFORE session state is emptied. A set-up in that window must
+// not count once the state empties: the next event sets up again.
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`present is set again after state empties late in a /clear (${surface})`, async ($, on) => {
+    engine(on)
+    let sid = 's1'
+    let state: Record<string, { value: unknown; version: number }> = {}
+    on('session.id', async () => ({ value: sid }) as never)
+    on('state.get', async (_$, e) => {
+      const a = e as { plugin: string; key: string }
+      return { value: state[`${a.plugin}.${a.key}`] ?? { value: undefined, version: 0 } } as never
+    })
+    on('state.set', async (_$, e) => {
+      const a = e as { plugin: string; key: string; value: unknown }
+      const version = (state[`${a.plugin}.${a.key}`]?.version ?? 0) + 1
+      state[`${a.plugin}.${a.key}`] = { value: a.value, version }
+      return { value: { isSet: true, version } } as never
+    })
+    on('session.end', async (_$, e) => ({ sessionId: (e as { sessionId: string }).sessionId }) as never)
+    on('prompt.submit', async (_$, e) => ({ text: (e as { text: string }).text }) as never)
+    const s = $ as unknown as { session: { end: (e: never) => Promise<unknown> }; prompt: { submit: (e: never) => Promise<unknown> } }
+    const prompt = () => s.prompt.submit({ text: 'go on', origin: { kind: 'composer' } } as never)
+
+    await start($, surface)
+    expect(state['side-stack.present']?.value).toBe(true)
+    await s.session.end({ reason: 'clear', sessionId: 's1', resume: {} } as never)
+    sid = 's2'
+    await prompt() // reaches side-stack under the new id, state not emptied yet
+    state = {} // now the engine empties session state
+    await prompt()
+    expect(state['side-stack.present']?.value).toBe(true)
+  })
+}
