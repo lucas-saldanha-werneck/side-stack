@@ -1,6 +1,6 @@
 {
   "name": "side-stack",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "One side pane where the other side panes stack, instead of one tab each.",
   "author": {
     "name": "Lucas Saldanha Werneck",
@@ -9,6 +9,11 @@
   "homepage": "https://github.com/lucas-saldanha-werneck/side-stack",
   "repository": "https://github.com/lucas-saldanha-werneck/side-stack",
   "license": "MIT",
-  "keywords": ["mod", "pane", "stack", "sidebar"],
+  "keywords": [
+    "mod",
+    "pane",
+    "stack",
+    "sidebar"
+  ],
   "types": "./types/index.d.ts"
 }

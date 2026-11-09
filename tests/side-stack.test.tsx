@@ -216,7 +216,7 @@ test('with no guest the pane shows which plugins fill it', async ($, on) => {
     expect(hint?.text).toBe('Install assumptions-pane, idea-shelf, plan-checklist or clean-view to fill this pane:')
     expect(hint?.props.dimColor).toBe(true)
     for (const name of ['assumptions-pane', 'idea-shelf', 'plan-checklist', 'clean-view']) {
-      expect(await ui.find({ type: 'Text', text: `/plugin install ${name} --marketplace lucas-saldanha-werneck/${name}` })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: `/plugin install ${name}@lucas-plugins` })).toBeDefined()
     }
     await ui.unmount()
   }
