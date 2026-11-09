@@ -1,23 +1,36 @@
-import { atom, update } from 'claude-code'
+import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement } from 'claude-code'
 
 // side-stack: one side pane that other mods ("guests") draw their sections
 // into, one under the other, instead of each opening a pane of its own (the
 // app shows separate panes as tabs, one at a time).
 //
-// The protocol, for guests:
-//   - read the atom { plugin: 'side-stack', key: 'present' }: true means this
-//     plugin is running in the session;
+// The protocol (v2), for guests:
+//   - side-stack is present when the atom { plugin: 'side-stack', key: 'present' }
+//     is true AND $.command.list() lists `stack` from plugin side-stack (there is
+//     no unload event, so the flag alone can outlive the plugin);
 //   - then hook ui.render on { component: 'Pane', requestId: 'side-stack' } and
-//     return <Box flexDirection="column">{section}{await next(e)}</Box>.
+//     return <Box flexDirection="column">{section}{await next(e)}</Box>;
+//   - and set your own { plugin: '<guest>', key: 'stacked' } true while you draw
+//     there (false otherwise).
 // This host draws nothing of its own while a guest draws, and always includes
 // what next(e) returns, so every guest's section shows.
 
 export const PANE_ID = 'side-stack'
 export const DEFAULT_TITLE = 'Stack'
-export const GUESTS = ['assumptions-pane', 'idea-shelf', 'plan-checklist'] as const
+export const GUESTS = ['assumptions-pane', 'idea-shelf', 'plan-checklist', 'quiet-tools'] as const
 
 const present = atom({ plugin: 'side-stack', key: 'present' } as const, false)
+
+// Each known guest's own flag: true while it draws its section into the stack.
+// Only the guest writes it; side-stack reads it while drawing, which redraws the
+// pane when it changes.
+// (One const per guest: the module scan lists what a plugin reads only from
+// literal references.)
+const assumptionsStacked = atom({ plugin: 'assumptions-pane', key: 'stacked' } as const, false)
+const ideasStacked = atom({ plugin: 'idea-shelf', key: 'stacked' } as const, false)
+const planStacked = atom({ plugin: 'plan-checklist', key: 'stacked' } as const, false)
+const quietStacked = atom({ plugin: 'quiet-tools', key: 'stacked' } as const, false)
 
 // The starter settings file, written on the first session when there is none.
 // Every value is null (= the default), so it changes nothing until edited.
@@ -65,6 +78,11 @@ const seedSettings = async ($: EngineInterface): Promise<void> => {
   }
 }
 
+// A pane title is one line: control characters (line breaks, tabs, escapes)
+// become spaces, runs of spaces one, at most 60 characters.
+export const cleanTitle = (title: string): string =>
+  title.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/ {2,}/g, ' ').trim().slice(0, 60).trim()
+
 const readConfig = async ($: EngineInterface): Promise<Config> => {
   const cfg: Config = { title: DEFAULT_TITLE, openOnStart: true }
   try {
@@ -73,7 +91,10 @@ const readConfig = async ($: EngineInterface): Promise<Config> => {
     const raw: unknown = JSON.parse(await $.fs.read(file))
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return cfg
     const { title, open_on_start } = raw as Record<string, unknown>
-    if (typeof title === 'string' && title.trim() !== '') cfg.title = title.trim().slice(0, 60)
+    if (typeof title === 'string') {
+      const clean = cleanTitle(title)
+      if (clean !== '') cfg.title = clean
+    }
     if (typeof open_on_start === 'boolean') cfg.openOnStart = open_on_start
   } catch {
     // missing or broken file: the defaults
@@ -94,18 +115,17 @@ export const hasContent = (node: unknown): boolean => {
   return hasContent(el.children)
 }
 
-// A known guest's slash command is listed: that guest runs in this session.
-// `plugin` may carry a marketplace suffix (name@marketplace).
-const guestLoaded = async ($: EngineInterface): Promise<boolean> => {
-  try {
-    const cmds = await $.command.list()
-    return cmds.some(c => {
-      const owner = c.plugin?.split('@')[0]
-      return owner !== undefined && (GUESTS as readonly string[]).includes(owner)
-    })
-  } catch {
-    return false
-  }
+// A known guest says it draws into the stack. A guest whose command is listed
+// but that does not draw (a version without side-stack support) does not count.
+const guestStacked = async ($: EngineInterface): Promise<boolean> => {
+  // Every flag is read (no early return), so the drawing follows each of them.
+  const flags = await Promise.all([
+    read($, assumptionsStacked).catch(() => false),
+    read($, ideasStacked).catch(() => false),
+    read($, planStacked).catch(() => false),
+    read($, quietStacked).catch(() => false),
+  ])
+  return flags.some(f => f === true)
 }
 
 export const register: Register = on => {
@@ -120,10 +140,29 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // There is no unload event. session.end is the session ending, not the
+  // plugin: on `clear` (and `resume`) the process goes on with no new
+  // session.start, so the flag stays true there. Otherwise the process exits.
+  on('session.end', async ($, e, next) => {
+    if (e.reason !== 'clear' && e.reason !== 'resume') {
+      try {
+        await update($, present, () => false)
+      } catch {
+        // ending anyway
+      }
+    }
+    return next(e)
+  })
+
   on('command.run', { command: 'stack' }, async $ => {
     const cfg = await readConfig($)
-    const opened = await $.ui.open({ id: PANE_ID, title: cfg.title })
-    return { text: opened.isPlaced ? `${cfg.title} pane opened.` : `${cfg.title} pane not shown: ${opened.reason}` }
+    try {
+      await update($, present, () => true)
+      const opened = await $.ui.open({ id: PANE_ID, title: cfg.title })
+      return { text: opened.isPlaced ? `${cfg.title} pane opened.` : `${cfg.title} pane not shown: ${opened.reason}` }
+    } catch (err) {
+      return { text: `${cfg.title} pane not opened: ${String(err instanceof Error ? err.message : err).slice(0, 200)}` }
+    }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
@@ -131,14 +170,14 @@ export const register: Register = on => {
     // Every guest beneath this hook draws its section here. Never skip it.
     const below: RenderElement = await next(e)
     // A guest loaded before side-stack draws above this hook, out of its sight;
-    // the commands it registered tell that it is there.
-    if (hasContent(below) || (await guestLoaded($))) return <Box flexDirection="column">{below}</Box>
+    // its `stacked` flag tells that it draws.
+    if (hasContent(below) || (await guestStacked($))) return <Box flexDirection="column">{below}</Box>
     return (
       <Box flexDirection="column">
         {below}
         <Text dimColor>Install {GUESTS.slice(0, -1).join(', ')} or {GUESTS.at(-1)} to fill this pane:</Text>
         {GUESTS.map(name => (
-          <Text dimColor>/plugin install {name}@lucas-plugins</Text>
+          <Text dimColor>/plugin install {name} --marketplace lucas-saldanha-werneck/{name}</Text>
         ))}
       </Box>
     )

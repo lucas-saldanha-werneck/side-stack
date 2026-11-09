@@ -30,7 +30,8 @@ const OWNERS: Record<string, string> = { stack: 'side-stack', assumptions: 'assu
 // the files that exist (POSIX paths) with their text; writes are recorded,
 // not made. Every `$.ui.open` is recorded too.
 // `drawsPane` false leaves ui.render to the test's own stand-in.
-const engine = (on: On, have: Record<string, string> = {}, drawsPane = true): { writes: Write[]; opened: Opened[] } => {
+// `openFails` makes every `$.ui.open` reject.
+const engine = (on: On, have: Record<string, string> = {}, drawsPane = true, openFails = false): { writes: Write[]; opened: Opened[] } => {
   const writes: Write[] = []
   const opened: Opened[] = []
   mock.env(on, { HOME: '/home/u' })
@@ -58,6 +59,7 @@ const engine = (on: On, have: Record<string, string> = {}, drawsPane = true): { 
     return { value: undefined } as never
   })
   on('ui.open', async (_$, e) => {
+    if (openFails) throw new Error('refused')
     opened.push(e as Opened)
     return { value: { isPlaced: true } } as never
   })
@@ -159,10 +161,10 @@ test('with no guest the pane shows which plugins fill it', async ($, on) => {
   for (const surface of ['terminal', 'desktop', 'mobile', 'vscode'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     const hint = await ui.find({ type: 'Text', text: /to fill this pane/ })
-    expect(hint?.text).toBe('Install assumptions-pane, idea-shelf or plan-checklist to fill this pane:')
+    expect(hint?.text).toBe('Install assumptions-pane, idea-shelf, plan-checklist or quiet-tools to fill this pane:')
     expect(hint?.props.dimColor).toBe(true)
-    for (const name of ['assumptions-pane', 'idea-shelf', 'plan-checklist']) {
-      expect(await ui.find({ type: 'Text', text: `/plugin install ${name}@lucas-plugins` })).toBeDefined()
+    for (const name of ['assumptions-pane', 'idea-shelf', 'plan-checklist', 'quiet-tools']) {
+      expect(await ui.find({ type: 'Text', text: `/plugin install ${name} --marketplace lucas-saldanha-werneck/${name}` })).toBeDefined()
     }
     await ui.unmount()
   }
@@ -243,13 +245,14 @@ test('two guests, one on each side of side-stack, stack in one pane in load orde
   await ui.unmount()
 })
 
-test('a guest loaded before side-stack hides the install hint', {
+test('a guest loaded before side-stack that says it is stacked hides the install hint', {
   plugins: [{
     name: 'assumptions-pane',
     tier: 'prepend',
     register(on) {
       on('session.start', async ($, e, next) => {
         await $.command.register({ name: 'assumptions', description: 'Assumptions' })
+        await $.state.set({ plugin: 'assumptions-pane', key: 'stacked' }, true)
         return next(e)
       })
       on('ui.render', { component: 'Pane', requestId: 'side-stack' }, async ($, e, next) => {
@@ -265,6 +268,91 @@ test('a guest loaded before side-stack hides the install hint', {
   expect(await ui.find({ type: 'Text', text: 'Assumptions' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /to fill this pane/ })).toBeUndefined()
   await ui.unmount()
+})
+
+test('a guest whose command is listed but that does not draw leaves the hint (no blank pane)', {
+  plugins: [{
+    name: 'assumptions-pane',
+    tier: 'prepend',
+    register(on) {
+      // An older guest: it registers its command and keeps its own pane.
+      on('session.start', async ($, e, next) => {
+        await $.command.register({ name: 'assumptions', description: 'Assumptions' })
+        return next(e)
+      })
+    },
+  }],
+}, async ($, on) => {
+  engine(on)
+  await start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /to fill this pane/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a guest that stops drawing (stacked back to false) brings the hint back', {
+  plugins: [{
+    name: 'quiet-tools',
+    tier: 'prepend',
+    register(on) {
+      on('session.start', async ($, e, next) => {
+        await $.command.register({ name: 'unstack', description: 'test: stop drawing' })
+        await $.state.set({ plugin: 'quiet-tools', key: 'stacked' }, true)
+        return next(e)
+      })
+      on('command.run', { command: 'unstack' }, async $ => {
+        await $.state.set({ plugin: 'quiet-tools', key: 'stacked' }, false)
+        return { text: 'ok' }
+      })
+    },
+  }],
+}, async ($, on) => {
+  engine(on)
+  await start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /to fill this pane/ })).toBeUndefined()
+  await $.command.run({ command: 'unstack', args: '' } as never)
+  expect(await ui.find({ type: 'Text', text: /to fill this pane/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('session.end clears the present flag, except on /clear and resume', { plugins: [READER] }, async ($, on) => {
+  engine(on)
+  on('session.end', async (_$, e) => ({ sessionId: (e as { sessionId: string }).sessionId }) as never)
+  const end = (reason: string) =>
+    ($ as unknown as { session: { end: (e: never) => Promise<unknown> } }).session.end({
+      reason, sessionId: 's1', resume: {},
+    } as never)
+  const ask = async () => JSON.stringify(await $.command.run({ command: 'present', args: '' } as never))
+  await start($)
+  await end('clear')
+  expect(await ask()).toContain('present=true')
+  await end('resume')
+  expect(await ask()).toContain('present=true')
+  await end('prompt_input_exit')
+  expect(await ask()).toContain('present=false')
+  // /stack sets it again.
+  await $.command.run({ command: 'stack', args: '' } as never)
+  expect(await ask()).toContain('present=true')
+})
+
+test('a title with control characters is cleaned and /stack still opens', async ($, on) => {
+  const { opened } = engine(on, { [CONFIG]: JSON.stringify({ title: 'My\nStack\u001b[31m\t ' }) })
+  const ran = await $.command.run({ command: 'stack', args: '' } as never)
+  expect(opened).toEqual([expect.objectContaining({ id: 'side-stack', title: 'My Stack [31m' })])
+  expect(JSON.stringify(ran)).toContain('pane opened')
+})
+
+test('a title made only of control characters falls back to Stack', async ($, on) => {
+  const { opened } = engine(on, { [CONFIG]: JSON.stringify({ title: '\n\t\u0007' }) })
+  await $.command.run({ command: 'stack', args: '' } as never)
+  expect(opened).toEqual([expect.objectContaining({ title: 'Stack' })])
+})
+
+test('/stack answers instead of failing when the pane cannot open', async ($, on) => {
+  engine(on, {}, true, true)
+  const ran = await $.command.run({ command: 'stack', args: '' } as never)
+  expect(JSON.stringify(ran)).toContain('Stack pane not opened')
 })
 
 test('another pane is left to the engine', async ($, on) => {
