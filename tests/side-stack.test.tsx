@@ -126,6 +126,48 @@ test('/stack opens the pane', async ($, on) => {
   expect(JSON.stringify(ran)).toContain('Stack pane opened')
 })
 
+test('/stack run by another plugin opens the pane and prints nothing (headless output stays clean)', {
+  plugins: [{
+    name: 'idea-shelf',
+    tier: 'prepend',
+    register(on) {
+      on('session.start', async ($, e, next) => {
+        await $.command.register({ name: 'bring', description: 'test: bring the stack forward' })
+        return next(e)
+      })
+      // A command run from inside a command.run hook is refused, so the
+      // guest's run starts from a timer, as the real guests do.
+      on('command.run', { command: 'bring' }, async $ => {
+        $.clock.after(0, async () => {
+          const ran = await $.command.run({ command: 'stack' })
+          $.ui.log('ran ' + JSON.stringify(ran ?? null))
+        })
+        return { text: 'asked' }
+      })
+    },
+  }],
+}, async ($, on) => {
+  const { opened } = engine(on)
+  const logs: string[] = []
+  on('ui.log', (_$, e) => {
+    logs.push(String((e as { text?: string }).text ?? ''))
+    return { value: undefined } as never
+  })
+  const clock = mock.clock(on, { now: 1_000_000 })
+  await start($)
+  const before = opened.length
+  await $.command.run({ command: 'bring', args: '' } as never)
+  await clock.advance(10)
+  let ran: string | undefined
+  for (let i = 0; i < 50 && ran === undefined; i++) {
+    ran = logs.find(l => l.startsWith('ran '))
+    if (ran === undefined) await clock.advance(10)
+  }
+  expect(opened.length).toBeGreaterThan(before)
+  expect(ran).toBeDefined()
+  expect(String(ran)).not.toContain('Stack pane')
+})
+
 test('config: title renames the pane and open_on_start false keeps it closed at start', async ($, on) => {
   const { opened, writes } = engine(on, { [CONFIG]: JSON.stringify({ title: 'Side', open_on_start: false }) })
   await start($)

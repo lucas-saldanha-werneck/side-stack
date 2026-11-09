@@ -374,11 +374,17 @@ export const register: Register = on => {
     const words = e.args.trim().split(/\s+/).filter(w => w !== '')
     if (words[0] === 'order') return { text: await orderCommand($, e.args.trim().slice(5).trim()) }
     if (words.length > 0) return { text: 'Usage: /stack (open the pane), /stack order, /stack order a,b,c, /stack order reset' }
+    // Another plugin asking for the pane (to bring a section forward) gets the
+    // outcome as a value and nothing is printed: in a headless run
+    // (`claude -p`) a printed line would land in the run's output.
+    const quiet = e.origin?.kind === 'plugin'
     try {
       await update($, present, () => true)
       const opened = await $.ui.open({ id: PANE_ID, title: cfg.title })
+      if (quiet) return {}
       return { text: opened.isPlaced ? `${cfg.title} pane opened.` : `${cfg.title} pane not shown: ${opened.reason}` }
     } catch (err) {
+      if (quiet) return {}
       return { text: `${cfg.title} pane not opened: ${String(err instanceof Error ? err.message : err).slice(0, 200)}` }
     }
   })
