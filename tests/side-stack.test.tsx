@@ -56,6 +56,7 @@ const engine = (on: On, have: Record<string, string> = {}, drawsPane = true, ope
   on('fs.write', async (_$, e) => {
     const w = e as Write
     writes.push({ path: posix(w.path), text: w.text })
+    have[posix(w.path)] = w.text
     return { value: undefined } as never
   })
   on('ui.open', async (_$, e) => {
@@ -139,9 +140,10 @@ test('config: the first session writes the starter file, every key null', async 
   await start($)
   expect(writes).toEqual([{ path: CONFIG, text: CONFIG_EXAMPLE }])
   const cfg = JSON.parse(CONFIG_EXAMPLE) as Record<string, unknown>
-  expect(Object.keys(cfg).sort()).toEqual(['_doc', 'open_on_start', 'title'])
+  expect(Object.keys(cfg).sort()).toEqual(['_doc', 'open_on_start', 'order', 'title'])
   expect(cfg.title).toBeNull()
   expect(cfg.open_on_start).toBeNull()
+  expect(cfg.order).toBeNull()
   // null means the default: the pane still opens at start, titled Stack.
   expect(opened).toEqual([expect.objectContaining({ title: 'Stack' })])
 })
@@ -166,9 +168,9 @@ test('with no guest the pane shows which plugins fill it', async ($, on) => {
   for (const surface of ['terminal', 'desktop', 'mobile', 'vscode'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     const hint = await ui.find({ type: 'Text', text: /to fill this pane/ })
-    expect(hint?.text).toBe('Install assumptions-pane, idea-shelf, plan-checklist or quiet-tools to fill this pane:')
+    expect(hint?.text).toBe('Install assumptions-pane, idea-shelf, plan-checklist or clean-view to fill this pane:')
     expect(hint?.props.dimColor).toBe(true)
-    for (const name of ['assumptions-pane', 'idea-shelf', 'plan-checklist', 'quiet-tools']) {
+    for (const name of ['assumptions-pane', 'idea-shelf', 'plan-checklist', 'clean-view']) {
       expect(await ui.find({ type: 'Text', text: `/plugin install ${name} --marketplace lucas-saldanha-werneck/${name}` })).toBeDefined()
     }
     await ui.unmount()
@@ -305,16 +307,16 @@ test('a guest whose command is listed but that does not draw leaves the hint (no
 
 test('a guest that stops drawing (stacked back to false) brings the hint back', {
   plugins: [{
-    name: 'quiet-tools',
+    name: 'clean-view',
     tier: 'prepend',
     register(on) {
       on('session.start', async ($, e, next) => {
         await $.command.register({ name: 'unstack', description: 'test: stop drawing' })
-        await $.state.set({ plugin: 'quiet-tools', key: 'stacked' }, true)
+        await $.state.set({ plugin: 'clean-view', key: 'stacked' }, true)
         return next(e)
       })
       on('command.run', { command: 'unstack' }, async $ => {
-        await $.state.set({ plugin: 'quiet-tools', key: 'stacked' }, false)
+        await $.state.set({ plugin: 'clean-view', key: 'stacked' }, false)
         return { text: 'ok' }
       })
     },
@@ -476,3 +478,226 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(opened).toHaveLength(2)
   })
 }
+
+// A v4 guest: its section in a Box keyed side-stack:plan-checklist; above side-stack it
+// fills the empty slot side-stack left for it, else it draws on top as before.
+const PLAN_BELOW = {
+  name: 'plan-checklist',
+  tier: 'append' as const,
+  register(on: On) {
+    on('ui.render', { component: 'Pane', requestId: 'side-stack' }, async ($, e, next) => {
+      const { Box, Text } = $.ui.resolve(e)
+      const section = <Box key="side-stack:plan-checklist" flexDirection="column"><Text>Plan 2/4</Text></Box>
+      const below = await next(e)
+      type N = { props?: Record<string, unknown>; children?: unknown[] }
+      const fill = (n: unknown): unknown => {
+        const el = n as N | null
+        if (el === null || typeof el !== 'object' || !Array.isArray(el.children)) return undefined
+        for (let i = 0; i < el.children.length; i++) {
+          const c = el.children[i] as N | null
+          const swap = c !== null && typeof c === 'object' && c.props?.key === 'side-stack:slot:plan-checklist' ? section : fill(c)
+          if (swap !== undefined) {
+            const children = [...el.children]
+            children[i] = swap
+            return { ...el, children }
+          }
+        }
+        return undefined
+      }
+      const filled = fill(below)
+      if (filled !== undefined) return filled as typeof below
+      return <Box flexDirection="column">{section}{below}</Box>
+    })
+  },
+}
+// A v4 guest: its section in a Box keyed side-stack:idea-shelf; above side-stack it
+// fills the empty slot side-stack left for it, else it draws on top as before.
+const IDEAS_BELOW = {
+  name: 'idea-shelf',
+  tier: 'append' as const,
+  register(on: On) {
+    on('ui.render', { component: 'Pane', requestId: 'side-stack' }, async ($, e, next) => {
+      const { Box, Text } = $.ui.resolve(e)
+      const section = <Box key="side-stack:idea-shelf" flexDirection="column"><Text>Ideas</Text></Box>
+      const below = await next(e)
+      type N = { props?: Record<string, unknown>; children?: unknown[] }
+      const fill = (n: unknown): unknown => {
+        const el = n as N | null
+        if (el === null || typeof el !== 'object' || !Array.isArray(el.children)) return undefined
+        for (let i = 0; i < el.children.length; i++) {
+          const c = el.children[i] as N | null
+          const swap = c !== null && typeof c === 'object' && c.props?.key === 'side-stack:slot:idea-shelf' ? section : fill(c)
+          if (swap !== undefined) {
+            const children = [...el.children]
+            children[i] = swap
+            return { ...el, children }
+          }
+        }
+        return undefined
+      }
+      const filled = fill(below)
+      if (filled !== undefined) return filled as typeof below
+      return <Box flexDirection="column">{section}{below}</Box>
+    })
+  },
+}
+// A v4 guest: its section in a Box keyed side-stack:assumptions-pane; above side-stack it
+// fills the empty slot side-stack left for it, else it draws on top as before.
+const ASSUME_ABOVE = {
+  name: 'assumptions-pane',
+  tier: 'prepend' as const,
+  register(on: On) {
+    on('ui.render', { component: 'Pane', requestId: 'side-stack' }, async ($, e, next) => {
+      const { Box, Text } = $.ui.resolve(e)
+      const section = <Box key="side-stack:assumptions-pane" flexDirection="column"><Text>Assumptions</Text></Box>
+      const below = await next(e)
+      type N = { props?: Record<string, unknown>; children?: unknown[] }
+      const fill = (n: unknown): unknown => {
+        const el = n as N | null
+        if (el === null || typeof el !== 'object' || !Array.isArray(el.children)) return undefined
+        for (let i = 0; i < el.children.length; i++) {
+          const c = el.children[i] as N | null
+          const swap = c !== null && typeof c === 'object' && c.props?.key === 'side-stack:slot:assumptions-pane' ? section : fill(c)
+          if (swap !== undefined) {
+            const children = [...el.children]
+            children[i] = swap
+            return { ...el, children }
+          }
+        }
+        return undefined
+      }
+      const filled = fill(below)
+      if (filled !== undefined) return filled as typeof below
+      return <Box flexDirection="column">{section}{below}</Box>
+    })
+  },
+}
+// A guest without the v4 key (an older version): section, then the rest.
+const OLD_ABOVE = {
+  name: 'clean-view',
+  tier: 'prepend' as const,
+  register(on: On) {
+    on('ui.render', { component: 'Pane', requestId: 'side-stack' }, async ($, e, next) => {
+      const { Box, Text } = $.ui.resolve(e)
+      return <Box flexDirection="column"><Text>Clean View (old)</Text>{await next(e)}</Box>
+    })
+  },
+}
+// A guest without the v4 key (an older version): section, then the rest.
+const OLD_BELOW = {
+  name: 'clean-view',
+  tier: 'append' as const,
+  register(on: On) {
+    on('ui.render', { component: 'Pane', requestId: 'side-stack' }, async ($, e, next) => {
+      const { Box, Text } = $.ui.resolve(e)
+      return <Box flexDirection="column"><Text>Clean View (old)</Text>{await next(e)}</Box>
+    })
+  },
+}
+
+// ---- v4: section order
+
+const textsOf = async ($: { ui: { mount: Function } }, surface: 'terminal' | 'desktop'): Promise<string[]> => {
+  const ui = await $.ui.mount({ ...PANE, surface })
+  const texts = ((await ui.findAll({ type: 'Text' })) as { text: string }[]).map(t => t.text)
+  await ui.unmount()
+  return texts
+}
+const sectionsOf = (texts: string[]): string[] =>
+  texts.filter(t => ['Plan 2/4', 'Ideas', 'Assumptions', 'Clean View (old)'].includes(t))
+const run = async ($: unknown, args: string): Promise<string> =>
+  JSON.stringify(await ($ as { command: { run: Function } }).command.run({ command: 'stack', args }))
+const savedOrder = (writes: Write[]): unknown => {
+  const last = writes.filter(w => w.path === CONFIG).at(-1)
+  return last === undefined ? 'no write' : (JSON.parse(last.text) as { order: unknown }).order
+}
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`order: guests beneath follow install order, then /stack order, then reset (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    const { writes } = engine(on, { [CONFIG]: CONFIG_EXAMPLE })
+    await start($, surface)
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Plan 2/4', 'Ideas'])
+    expect(await run($, 'order idea-shelf,plan-checklist')).toContain('Order: idea-shelf, plan-checklist')
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Ideas', 'Plan 2/4'])
+    expect(savedOrder(writes)).toEqual(['idea-shelf', 'plan-checklist'])
+    // every other key of the file is kept
+    const kept = JSON.parse(writes.at(-1)!.text) as Record<string, unknown>
+    expect(Object.keys(kept).sort()).toEqual(['_doc', 'open_on_start', 'order', 'title'])
+    expect(await run($, 'order reset')).toContain('install order')
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Plan 2/4', 'Ideas'])
+    expect(savedOrder(writes)).toBeNull()
+  })
+
+  test(`order: a guest above side-stack fills its slot (${surface})`, { plugins: [ASSUME_ABOVE, PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    engine(on)
+    await start($, surface)
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Assumptions', 'Plan 2/4', 'Ideas'])
+    await run($, 'order plan-checklist,assumptions-pane,idea-shelf')
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Plan 2/4', 'Assumptions', 'Ideas'])
+    await run($, 'order idea-shelf,plan-checklist,assumptions-pane')
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Ideas', 'Plan 2/4', 'Assumptions'])
+    // listing only one: the rest follow in install order
+    await run($, 'order idea-shelf')
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Assumptions', 'Ideas', 'Plan 2/4'])
+  })
+
+  test(`order: the saved order comes back in a new session (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    engine(on, { [CONFIG]: JSON.stringify({ order: ['idea-shelf', 'plan-checklist'] }) })
+    await start($, surface)
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Ideas', 'Plan 2/4'])
+    expect(await run($, 'order')).toContain('Order: idea-shelf, plan-checklist')
+  })
+
+  test(`order: an unknown name is refused with the known ones, nothing saved (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    const { writes } = engine(on)
+    await start($, surface)
+    const before = writes.length
+    const answer = await run($, 'order idea-shelf,nope')
+    expect(answer).toContain('Not changed: unknown nope')
+    expect(answer).toContain('Known: assumptions-pane, idea-shelf, plan-checklist, clean-view')
+    expect(writes.length).toBe(before)
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Plan 2/4', 'Ideas'])
+  })
+
+  test(`order: guests without the v4 key still show, above on top and beneath at the end (${surface})`, { plugins: [OLD_ABOVE, PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    engine(on)
+    await start($, surface)
+    await run($, 'order idea-shelf,plan-checklist')
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Clean View (old)', 'Ideas', 'Plan 2/4'])
+  })
+
+  test(`order: a guest beneath without the v4 key goes to the end (${surface})`, { plugins: [OLD_BELOW, PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    engine(on)
+    await start($, surface)
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Clean View (old)', 'Plan 2/4', 'Ideas'])
+    await run($, 'order idea-shelf,plan-checklist')
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Ideas', 'Plan 2/4', 'Clean View (old)'])
+  })
+}
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`order: an open pane redraws at once (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    engine(on)
+    await start($, surface)
+    const ui = await $.ui.mount({ ...PANE, surface })
+    const now = async () => sectionsOf((await ui.findAll({ type: 'Text' })).map(t => t.text))
+    expect(await now()).toEqual(['Plan 2/4', 'Ideas'])
+    await run($, 'order idea-shelf,plan-checklist')
+    expect(await now()).toEqual(['Ideas', 'Plan 2/4'])
+    await ui.unmount()
+  })
+}
+
+test('/stack order with no list shows the order and the known names', async ($, on) => {
+  engine(on)
+  await start($)
+  const answer = await run($, 'order')
+  expect(answer).toContain('Order: install order (default)')
+  expect(answer).toContain('Known: assumptions-pane, idea-shelf, plan-checklist, clean-view')
+})
+
+test('/stack with other words answers how to use it', async ($, on) => {
+  const { opened } = engine(on)
+  expect(await run($, 'sideways')).toContain('Usage: /stack')
+  expect(opened).toEqual([])
+})

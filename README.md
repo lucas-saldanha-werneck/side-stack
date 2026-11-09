@@ -6,7 +6,7 @@ under the other.
 ## Why
 
 The desktop app and the terminal show separate panes as tabs: one is shown, the others wait behind
-their tab. With assumptions-pane, idea-shelf, plan-checklist and quiet-tools installed, you see one
+their tab. With assumptions-pane, idea-shelf, plan-checklist and clean-view installed, you see one
 of them at a time. With side-stack installed, they draw into the same pane, so you see them all at
 once. This
 sketch shows roughly how it looks. It is not a screenshot:
@@ -47,7 +47,7 @@ its own repo (works now):
 /plugin install assumptions-pane --marketplace lucas-saldanha-werneck/assumptions-pane
 /plugin install idea-shelf --marketplace lucas-saldanha-werneck/idea-shelf
 /plugin install plan-checklist --marketplace lucas-saldanha-werneck/plan-checklist
-/plugin install quiet-tools --marketplace lucas-saldanha-werneck/quiet-tools
+/plugin install clean-view --marketplace lucas-saldanha-werneck/clean-view
 ```
 
 or, after they are in the lucas-plugins catalog with side-stack support:
@@ -56,10 +56,11 @@ or, after they are in the lucas-plugins catalog with side-stack support:
 /plugin install assumptions-pane@lucas-plugins
 /plugin install idea-shelf@lucas-plugins
 /plugin install plan-checklist@lucas-plugins
-/plugin install quiet-tools@lucas-plugins
+/plugin install clean-view@lucas-plugins
 ```
 
-The side-stack support in each guest is being added. A guest version without it keeps its own pane,
+clean-view was called quiet-tools; until its repo finishes the rename, its line above may need
+`quiet-tools` as the plugin name. The side-stack support in each guest is being added. A guest version without it keeps its own pane,
 and the Stack pane keeps showing its install hint rather than a blank body.
 
 From a shell, the same commands work with `claude plugin` in place of `/plugin`. `/plugin` does not
@@ -83,7 +84,8 @@ Each guest works alone too. Without side-stack, it opens its own pane and its ow
     session starts, the pane stays open and is drawn once it attaches. This comes from the types;
     it has not been tried by hand in the app.
 - `/stack` opens it at any width, on both.
-- Sections show in plugin load order, the engine's. A mod cannot change that order.
+- Sections show in install (load) order unless you set an order: see [Order](#order).
+- `/stack order` shows the order; `/stack order a,b,c` changes it; `/stack order reset` goes back.
 
 ## Settings
 
@@ -95,10 +97,35 @@ updates never touch it.
 | --- | --- | --- |
 | `title` | `"Stack"` | The pane's title. |
 | `open_on_start` | `true` | Open the pane by itself at session start. `/stack` opens it either way. |
+| `order` | install order | The order of the sections, as a list of plugin names. See [Order](#order). |
+
+## Order
+
+By default the sections follow install (load) order: the plugins load in an order the engine picks,
+and that order is what you see. To change it:
+
+```
+/stack order plan-checklist,assumptions-pane,idea-shelf
+```
+
+The pane redraws at once, and the order is saved as `order` in the settings file, so the next
+session uses it too. Plugins you leave out follow the listed ones, in install order. Other commands:
+
+- `/stack order` shows the current order and the names side-stack knows (the four guests below,
+  plus any other plugin whose section it has seen in the pane).
+- `/stack order reset` goes back to install order (`order` becomes `null`).
+- An unknown name changes nothing; the answer lists the known names.
+
+How it works: in the drawing chain, plugins loaded earlier wrap the ones loaded later. side-stack
+takes each guest's section out of what is drawn beneath it and puts them back in your order. For a
+guest loaded before side-stack (drawn above it, out of its sight) it leaves an empty slot at the
+right place, and that guest moves its section into the slot. This needs guests that follow protocol
+version 4 (below). An older guest still shows: on top if it loaded before side-stack, at the end if
+it loaded after, wherever your order puts it.
 
 ## How a plugin joins the stack
 
-The protocol, version 3:
+The protocol, version 4:
 
 1. **Is side-stack there?** It is when `$.command.list()` lists `stack` whose `plugin`, with any
    `@marketplace` suffix removed, is `side-stack`. That alone. Check again at every point where you
@@ -132,22 +159,45 @@ The protocol, version 3:
    key: 'stacked' }` to `true`, and back to `false` when you stop. side-stack hides its install hint
    only when a known guest's `stacked` is `true` or something visible is drawn beneath it, never just
    because a guest's command exists. Known guests: assumptions-pane, idea-shelf, plan-checklist,
-   quiet-tools.
+   clean-view.
 3. **Do not open your own pane.** Close it with `$.ui.close` if you already did, or have it draw one
    line, "Shown in the Stack pane (/stack)", so a list never shows twice.
 4. **Draw your section** by hooking the Stack pane, and always include what `next(e)` returns, so
-   the plugins after you still show:
+   the plugins after you still show. For the order to apply to you (v4), wrap your section in a Box
+   keyed `side-stack:<your plugin>`, and when the tree beneath you holds an empty Box keyed
+   `side-stack:slot:<your plugin>` (side-stack is beneath you and wants you there), return a copy of
+   that tree with the slot replaced by your section:
 
    ```tsx
+   type N = { props?: Record<string, unknown>; children?: unknown[] }
+   // A copy of the tree with my slot replaced by my section, or undefined.
+   function fill(n: unknown, section: unknown): unknown {
+     const el = n as N | null
+     if (el === null || typeof el !== 'object' || !Array.isArray(el.children)) return undefined
+     for (let i = 0; i < el.children.length; i++) {
+       const c = el.children[i] as N | null
+       const swap = c?.props?.key === 'side-stack:slot:idea-shelf' ? section : fill(c, section)
+       if (swap !== undefined) {
+         const children = [...el.children]
+         children[i] = swap
+         return { ...el, children }
+       }
+     }
+     return undefined
+   }
+
    on('ui.render', { component: 'Pane', requestId: 'side-stack' }, async ($, e, next) => {
      const { Box, Text } = $.ui.resolve(e)
-     return (
-       <Box flexDirection="column">
+     const section = (
+       <Box key="side-stack:idea-shelf" flexDirection="column">
          <Text bold>Ideas</Text>
          {/* your rows, capped so you do not push the others off screen */}
-         {await next(e)}
        </Box>
      )
+     const below = await next(e)
+     const filled = fill(below, section)
+     if (filled !== undefined) return filled as typeof below
+     return <Box flexDirection="column">{section}{below}</Box>
    })
    ```
 
@@ -170,7 +220,10 @@ One hooks module (`hooks/register.tsx`). At session start it sets the `present` 
 settings file if missing, registers `/stack` and opens the pane. It remembers that session's id; the
 first event under another id (after a `/clear`) does the same again, without rewriting the settings
 file and without opening a second pane. Its `ui.render` hook on the pane
-calls `next(e)` and returns what that gives inside its own Box; it adds the install hint only when
+calls `next(e)`; with no order set it returns what that gives inside its own Box, and with one it
+rearranges the v4 sections and leaves slots as described under [Order](#order). It reads the order
+from session state while drawing (loaded from the settings file at session start), so a change
+redraws the pane. It adds the install hint only when
 nothing visible came back and no known guest's `stacked` flag is `true`. A pane title from the
 settings file is cleaned of control characters (line breaks, tabs, escapes) and cut at 60
 characters; `/stack` answers with a line instead of failing when the pane cannot open.
@@ -201,6 +254,10 @@ Guests go back to their own panes from the next session.
   or right after the pane draws under it. A test models that `/clear` (session end, new id, no
   session start, empty state) on the terminal and desktop surfaces; the fix itself has not been
   tried by hand yet.
+- Ordering was proven by hand in a real terminal with throwaway mods (guests above and beneath the
+  host, three orders). side-stack's own ordering code and the `/stack order` command are covered by
+  the tests (terminal and desktop) but have not been tried by hand with the real guests, and not at
+  all in the desktop app.
 
 ## Credits
 
