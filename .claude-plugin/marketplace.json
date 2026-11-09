@@ -9,7 +9,7 @@
     {
       "name": "side-stack",
       "source": "./",
-      "description": "One side pane that other mods stack their sections into, so assumptions-pane, idea-shelf and plan-checklist show together instead of as separate tabs."
+      "description": "One side pane where the other side panes stack, instead of one tab each."
     }
   ]
 }

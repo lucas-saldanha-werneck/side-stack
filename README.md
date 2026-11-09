@@ -1,7 +1,7 @@
 # side-stack
 
-A Claude Code mod that opens one side pane, titled Stack, where other mods draw their sections one
-under the other.
+A Claude Code mod that opens one side pane, titled Stack, where the other side panes stack one under
+the other, instead of one tab each.
 
 ## Why
 
@@ -27,30 +27,14 @@ dim line telling which plugins fill it, and the command that installs each from 
 
 ## Install
 
-At the prompt of a terminal Claude Code session, from this repo (works now):
-
-```
-/plugin install side-stack --marketplace lucas-saldanha-werneck/side-stack
-```
-
-After side-stack is in the lucas-plugins catalog (not yet):
+At the prompt of a terminal Claude Code session:
 
 ```
 /plugin marketplace add lucas-saldanha-werneck/claude-plugins
 /plugin install side-stack@lucas-plugins
 ```
 
-side-stack alone shows an empty pane with an install hint. Install the mods that fill it, each from
-its own repo (works now):
-
-```
-/plugin install assumptions-pane --marketplace lucas-saldanha-werneck/assumptions-pane
-/plugin install idea-shelf --marketplace lucas-saldanha-werneck/idea-shelf
-/plugin install plan-checklist --marketplace lucas-saldanha-werneck/plan-checklist
-/plugin install clean-view --marketplace lucas-saldanha-werneck/clean-view
-```
-
-or, after they are in the lucas-plugins catalog with side-stack support:
+side-stack alone shows an empty pane with an install hint. Install the mods that fill it:
 
 ```
 /plugin install assumptions-pane@lucas-plugins
@@ -59,9 +43,8 @@ or, after they are in the lucas-plugins catalog with side-stack support:
 /plugin install clean-view@lucas-plugins
 ```
 
-clean-view was called quiet-tools; until its repo finishes the rename, its line above may need
-`quiet-tools` as the plugin name. The side-stack support in each guest is being added. A guest version without it keeps its own pane,
-and the Stack pane keeps showing its install hint rather than a blank body.
+A guest version without side-stack support keeps its own pane, and the Stack pane keeps showing its
+install hint rather than a blank body.
 
 From a shell, the same commands work with `claude plugin` in place of `/plugin`. `/plugin` does not
 run in the desktop app: install from a terminal with the user scope, and the mod also loads in the
@@ -275,13 +258,12 @@ characters; `/stack` answers with a line instead of failing when the pane cannot
 ## Uninstall
 
 ```
-/plugin uninstall side-stack@side-stack
-/plugin marketplace remove side-stack
+/plugin uninstall side-stack@lucas-plugins
 ```
 
 Guests go back to their own panes from the next session.
 
-## Limits and what was not tested
+## Limits
 
 - Built and tested on Claude Code 2.1.319. It needs a version with mods (hooks modules).
 - Tests: `claude plugin validate .` and `claude plugin test .` (CI on Ubuntu, macOS and Windows). The
