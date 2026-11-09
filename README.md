@@ -147,9 +147,9 @@ The protocol, version 2:
 
    Start the section with a one-line heading (`Ideas`, `Assumptions`, `Plan 2/4`) so stacked parts
    are told apart.
-5. **Bring the stack forward.** Panes are per plugin: `$.ui.open` and `$.ui.panes()` only reach your
-   own, so a guest cannot open the `side-stack` pane directly. The supported way is to run the host's
-   command: `void $.command.run({ command: 'stack' }).catch(() => {})`. Per the API types (2.1.319),
+5. **Bring the stack forward.** `$.ui.panes()` lists only your own panes, and the types do not say
+   that `$.ui.open({ id: 'side-stack' })` from a guest reaches side-stack's pane rather than opening
+   one of the guest's own, so do not rely on it. The supported way is to run the host's command: `void $.command.run({ command: 'stack' }).catch(() => {})`. Per the API types (2.1.319),
    `$.command.run` is queued and runs once the session is idle, shows its line in the transcript
    ("Stack pane opened."), and rejects when called inside a hook the turn or session start waits
    on, so do not await it there. Whether a pane opened from a plugin-run command counts as "asked"
