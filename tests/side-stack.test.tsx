@@ -701,3 +701,33 @@ test('/stack with other words answers how to use it', async ($, on) => {
   expect(await run($, 'sideways')).toContain('Usage: /stack')
   expect(opened).toEqual([])
 })
+
+// A real /clear (2.1.319): session $.state is empty, module values stay, a new
+// session id, no session.start. The pane must keep the saved order at once,
+// before any prompt.
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`order: kept right after a real /clear, before any event (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    engine(on, { [CONFIG]: JSON.stringify({ order: ['idea-shelf', 'plan-checklist'] }) })
+    let sid = 's1'
+    const state: Record<string, Record<string, { value: unknown; version: number }>> = {}
+    on('session.id', async () => ({ value: sid }) as never)
+    on('state.get', async (_$, e) => {
+      const a = e as { plugin: string; key: string }
+      return { value: state[sid]?.[`${a.plugin}.${a.key}`] ?? { value: undefined, version: 0 } } as never
+    })
+    on('state.set', async (_$, e) => {
+      const a = e as { plugin: string; key: string; value: unknown }
+      const box = (state[sid] ??= {})
+      const version = (box[`${a.plugin}.${a.key}`]?.version ?? 0) + 1
+      box[`${a.plugin}.${a.key}`] = { value: a.value, version }
+      return { value: { isSet: true, version } } as never
+    })
+    on('session.end', async (_$, e) => ({ sessionId: (e as { sessionId: string }).sessionId }) as never)
+    await start($, surface)
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Ideas', 'Plan 2/4'])
+    await ($ as unknown as { session: { end: (e: never) => Promise<unknown> } }).session.end({ reason: 'clear', sessionId: 's1', resume: {} } as never)
+    sid = 's2'
+    expect(state.s2).toBeUndefined()
+    expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Ideas', 'Plan 2/4'])
+  })
+}

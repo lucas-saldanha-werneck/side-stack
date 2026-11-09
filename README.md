@@ -221,9 +221,11 @@ settings file if missing, registers `/stack` and opens the pane. It remembers th
 first event under another id (after a `/clear`) does the same again, without rewriting the settings
 file and without opening a second pane. Its `ui.render` hook on the pane
 calls `next(e)`; with no order set it returns what that gives inside its own Box, and with one it
-rearranges the v4 sections and leaves slots as described under [Order](#order). It reads the order
-from session state while drawing (loaded from the settings file at session start), so a change
-redraws the pane. It adds the install hint only when
+rearranges the v4 sections and leaves slots as described under [Order](#order). It keeps the order
+from the settings file in the module (read at session start, after a `/clear` and by `/stack
+order`), because a real `/clear` empties session state but keeps module values; `/stack order`
+also redraws the pane at once. An order you type into the file by hand takes effect at the next
+session start or `/clear`. It adds the install hint only when
 nothing visible came back and no known guest's `stacked` flag is `true`. A pane title from the
 settings file is cleaned of control characters (line breaks, tabs, escapes) and cut at 60
 characters; `/stack` answers with a line instead of failing when the pane cannot open.
@@ -254,6 +256,9 @@ Guests go back to their own panes from the next session.
   or right after the pane draws under it. A test models that `/clear` (session end, new id, no
   session start, empty state) on the terminal and desktop surfaces; the fix itself has not been
   tried by hand yet.
+- The order survives a real `/clear`: tried by hand in a real terminal session (Claude Code 2.1.319)
+  with the four guests, before and after `/clear`, and after changing the order between two
+  `/clear`s. Not tried in the desktop app.
 - Ordering was proven by hand in a real terminal with throwaway mods (guests above and beneath the
   host, three orders). side-stack's own ordering code and the `/stack order` command are covered by
   the tests (terminal and desktop) but have not been tried by hand with the real guests, and not at

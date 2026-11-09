@@ -195,6 +195,13 @@ const guestStacked = async ($: EngineInterface): Promise<boolean> => {
 // reload empties it, which costs one extra, harmless resync.
 let setUpIn: string | undefined
 
+// The section order from the settings file, kept in the module: a real /clear
+// empties session $.state but keeps module values (seen on 2.1.319), so the
+// pane keeps the order after a /clear. undefined = not read yet (a fresh
+// module): the pane reads the file then. Refreshed at each set-up and by
+// /stack order.
+let cachedOrder: string[] | null | undefined
+
 const currentSession = async ($: EngineInterface): Promise<string | undefined> => {
   try {
     return await $.session.id()
@@ -215,9 +222,11 @@ const stackListed = async ($: EngineInterface): Promise<boolean> => {
 // Sets `present`, makes sure /stack is listed and, with open_on_start, opens
 // the pane if it is not open. Never throws.
 const setUp = async ($: EngineInterface, id: string | undefined, isStart: boolean): Promise<void> => {
-  setUpIn = id
   try {
     await update($, present, () => true)
+    // Only a set-up whose write landed counts: one that was refused (say, from
+    // a context that may not write) is tried again on the next event.
+    setUpIn = id
   } catch {
     // keep going: the command and the pane matter more
   }
@@ -229,6 +238,7 @@ const setUp = async ($: EngineInterface, id: string | undefined, isStart: boolea
     // already there, or refused
   }
   const cfg = await readConfig($)
+  cachedOrder = cfg.order
   try {
     await update($, order, () => cfg.order)
   } catch {
@@ -303,11 +313,13 @@ const orderCommand = async ($: EngineInterface, arg: string): Promise<string> =>
   }
   const failed = await saveOrder($, next)
   if (failed !== undefined) return `Not changed: ${failed}`
+  cachedOrder = next
   try {
     await update($, order, () => next)
   } catch {
-    // saved; the next session picks it up
+    // saved and cached; the redraw below still shows it
   }
+  $.ui.invalidate('ui.render')
   return next === null ? 'Order: install order (default).' : `Order: ${next.join(', ')}. Sections not listed follow in install order.`
 }
 
@@ -371,7 +383,11 @@ export const register: Register = on => {
     const below: RenderElement = await next(e)
     const { sections, rest } = extractSections(below)
     for (const name of sections.keys()) seen.add(name)
-    const wanted = await read($, order)
+    // Read for the subscription (a change redraws the pane); the module copy
+    // is what counts, since session state is empty after a /clear.
+    const fromState = await read($, order)
+    if (cachedOrder === undefined) cachedOrder = (await readConfig($)).order ?? fromState
+    const wanted = cachedOrder
     // A guest loaded before side-stack draws above this hook, out of its sight;
     // its `stacked` flag tells that it draws.
     const filled = hasContent(below) || (await guestStacked($))
