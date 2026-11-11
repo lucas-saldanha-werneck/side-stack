@@ -30,7 +30,7 @@ dim line telling which plugins fill it, and the command that installs each from 
 At the prompt of a terminal Claude Code session:
 
 ```
-/plugin marketplace add lucas-saldanha-werneck/claude-plugins
+/plugin marketplace add lucas-saldanha-werneck/lucas-tools
 /plugin install side-stack@lucas-tools
 ```
 
