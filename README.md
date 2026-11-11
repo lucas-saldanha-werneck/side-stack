@@ -31,16 +31,16 @@ At the prompt of a terminal Claude Code session:
 
 ```
 /plugin marketplace add lucas-saldanha-werneck/claude-plugins
-/plugin install side-stack@lucas-plugins
+/plugin install side-stack@lucas-tools
 ```
 
 side-stack alone shows an empty pane with an install hint. Install the mods that fill it:
 
 ```
-/plugin install assumptions-pane@lucas-plugins
-/plugin install idea-shelf@lucas-plugins
-/plugin install plan-checklist@lucas-plugins
-/plugin install clean-view@lucas-plugins
+/plugin install assumptions-pane@lucas-tools
+/plugin install idea-shelf@lucas-tools
+/plugin install plan-checklist@lucas-tools
+/plugin install clean-view@lucas-tools
 ```
 
 A guest version without side-stack support keeps its own pane, and the Stack pane keeps showing its
@@ -258,7 +258,7 @@ characters; `/stack` answers with a line instead of failing when the pane cannot
 ## Uninstall
 
 ```
-/plugin uninstall side-stack@lucas-plugins
+/plugin uninstall side-stack@lucas-tools
 ```
 
 Guests go back to their own panes from the next session.

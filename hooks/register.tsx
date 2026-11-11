@@ -536,7 +536,7 @@ export const register: Register = on => {
           {below}
           <Text dimColor>Install {GUESTS.slice(0, -1).join(', ')} or {GUESTS.at(-1)} to fill this pane:</Text>
           {GUESTS.map(name => (
-            <Text dimColor>/plugin install {name}@lucas-plugins</Text>
+            <Text dimColor>/plugin install {name}@lucas-tools</Text>
           ))}
         </Box>
       )

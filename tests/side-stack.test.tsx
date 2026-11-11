@@ -45,7 +45,7 @@ const engine = (on: On, have: Record<string, string> = {}, drawsPane = true, ope
     return { value: undefined } as never
   })
   on('command.list', async () => ({
-    value: commands.map(c => ({ ...c, source: 'plugin', plugin: `${OWNERS[c.name] ?? 'unknown'}@lucas-plugins` })),
+    value: commands.map(c => ({ ...c, source: 'plugin', plugin: `${OWNERS[c.name] ?? 'unknown'}@lucas-tools` })),
   }) as never)
   on('fs.exists', async (_$, e) => ({ value: posix((e as { path: string }).path) in have }) as never)
   on('fs.read', async (_$, e) => {
@@ -216,7 +216,7 @@ test('with no guest the pane shows which plugins fill it', async ($, on) => {
     expect(hint?.text).toBe('Install assumptions-pane, idea-shelf, plan-checklist or clean-view to fill this pane:')
     expect(hint?.props.dimColor).toBe(true)
     for (const name of ['assumptions-pane', 'idea-shelf', 'plan-checklist', 'clean-view']) {
-      expect(await ui.find({ type: 'Text', text: `/plugin install ${name}@lucas-plugins` })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: `/plugin install ${name}@lucas-tools` })).toBeDefined()
     }
     await ui.unmount()
   }
