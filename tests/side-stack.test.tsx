@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { CONFIG_EXAMPLE, estimateRows } from '../hooks/register'
+import { CONFIG_EXAMPLE } from '../hooks/register'
 
 // On Windows the engine resolves a drive-less absolute path onto the current
 // drive with backslashes (D:\home\u\...). Compare paths in POSIX form.
@@ -991,10 +991,13 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await start($, surface)
     await run($, 'footer plan-checklist')
     const ui = await mountWith($, surface)
-    expect((await ui.find({ key: 'stack-pinned' }))?.props.height).toBe(20)
+    const pinned = await ui.find({ key: 'stack-pinned' })
+    expect(pinned?.props.minHeight).toBe(20)
+    expect(pinned?.props.height).toBeUndefined()
     const top = await ui.find({ key: 'stack-top' })
     expect(top?.props.flexGrow).toBe(1)
-    expect(top?.props.overflow).toBe('hidden')
+    // nothing is ever cut: no overflow hidden, no shrinking
+    expect(top?.props.overflow).toBeUndefined()
     const footer = await ui.find({ key: 'stack-footer' })
     expect(footer?.props.flexShrink).toBe(0)
     expect(footer?.text).toContain('Plan 2/4')
@@ -1002,11 +1005,23 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await ui.unmount()
   })
 
-  test(`footer: not pinned inline, without room, or when it does not fit (one column, nothing cut) (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+  test(`footer: taller than the pane, the pinned column grows (minHeight), nothing cut (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
     engine(on)
     await start($, surface)
     await run($, 'footer plan-checklist')
-    for (const props of [{ placement: 'inline' }, { scroll: { offset: 0, bodyRows: 0 } }, { scroll: { offset: 0, bodyRows: 1 } }]) {
+    const ui = await mountWith($, surface, { scroll: { offset: 0, bodyRows: 1 } })
+    const pinned = await ui.find({ key: 'stack-pinned' })
+    expect(pinned?.props.minHeight).toBe(1)
+    expect(pinned?.props.height).toBeUndefined()
+    expect(sectionsOf((await ui.findAll({ type: 'Text' })).map(t => t.text))).toEqual(['Ideas', 'Plan 2/4'])
+    await ui.unmount()
+  })
+
+  test(`footer: not pinned inline or without room (one column) (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+    engine(on)
+    await start($, surface)
+    await run($, 'footer plan-checklist')
+    for (const props of [{ placement: 'inline' }, { scroll: { offset: 0, bodyRows: 0 } }]) {
       const ui = await mountWith($, surface, props)
       expect(await ui.find({ key: 'stack-pinned' })).toBeUndefined()
       expect(await ui.find({ key: 'stack-top' })).toBeUndefined()
@@ -1015,17 +1030,32 @@ for (const surface of ['terminal', 'desktop'] as const) {
     }
   })
 
-  test(`footer: not pinned while a guest above side-stack draws (its size is unknown) (${surface})`, {
+  test(`footer: still pinned when a footer guest was loaded before side-stack (fills its slot later) (${surface})`, {
     plugins: [STACKED_ASSUME_ABOVE, PLAN_BELOW, IDEAS_BELOW],
   }, async ($, on) => {
     engine(on)
     await start($, surface)
     await run($, 'footer assumptions-pane')
     const ui = await mountWith($, surface)
-    expect(await ui.find({ key: 'stack-pinned' })).toBeUndefined()
-    // it still fills its slot, inside the footer
+    expect((await ui.find({ key: 'stack-pinned' }))?.props.minHeight).toBe(20)
+    // it fills its slot, inside the pinned footer
     expect((await ui.find({ key: 'stack-footer' }))?.text).toContain('Assumptions')
     expect(sectionsOf((await ui.findAll({ type: 'Text' })).map(t => t.text))).toEqual(['Plan 2/4', 'Ideas', 'Assumptions'])
+    await ui.unmount()
+  })
+
+  test(`footer: still pinned when a body guest was loaded before side-stack (${surface})`, {
+    plugins: [STACKED_ASSUME_ABOVE, PLAN_BELOW, IDEAS_BELOW],
+  }, async ($, on) => {
+    engine(on)
+    await start($, surface)
+    await run($, 'order idea-shelf,assumptions-pane')
+    await run($, 'footer plan-checklist')
+    const ui = await mountWith($, surface)
+    expect((await ui.find({ key: 'stack-pinned' }))?.props.minHeight).toBe(20)
+    expect((await ui.find({ key: 'stack-top' }))?.text).toContain('Assumptions')
+    expect((await ui.find({ key: 'stack-footer' }))?.text).toContain('Plan 2/4')
+    expect(sectionsOf((await ui.findAll({ type: 'Text' })).map(t => t.text))).toEqual(['Ideas', 'Assumptions', 'Plan 2/4'])
     await ui.unmount()
   })
 
@@ -1048,25 +1078,11 @@ test('/stack header with no list shows the numbered zones', async ($, on) => {
   expect(answer).toContain('1 · assumptions-pane')
 })
 
-test('estimateRows: wraps long text, truncates on request, adds gaps and borders, rows take their tallest piece', async () => {
-  const t = (text: string, props: Record<string, unknown> = {}) => ({ type: 'Text', props, children: [text] })
-  const box = (props: Record<string, unknown>, ...children: unknown[]) => ({ type: 'Box', props, children })
-  expect(estimateRows(t('short'), 20)).toBe(1)
-  expect(estimateRows(t('x'.repeat(45)), 20)).toBe(3)
-  expect(estimateRows(t('x'.repeat(45), { wrap: 'truncate-end' }), 20)).toBe(1)
-  expect(estimateRows(t('a\nb\nc'), 20)).toBe(3)
-  expect(estimateRows(box({ flexDirection: 'column', gap: 1 }, t('a'), t('b'), box({ flexDirection: 'column' })), 20)).toBe(3)
-  expect(estimateRows(box({ flexDirection: 'column', borderStyle: 'round' }, t('a')), 20)).toBe(3)
-  expect(estimateRows(box({ flexDirection: 'row' }, t('[x] '), t('y'.repeat(30))), 20)).toBe(2)
-  expect(estimateRows({ type: 'Button', props: { label: 'Go' }, children: [] }, 20)).toBe(1)
-  expect(estimateRows(box({ flexDirection: 'column', height: 7 }, t('a')), 20)).toBe(7)
-})
-
 // The engine's own pane body comes back from next(e) as an `engine` node, and a
 // Pane refuses one under a Box with a height (seen on 2.1.321 in a real
 // terminal). With no stand-in beneath, the kit hands side-stack that node.
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`footer: pinned with the engine's own node beneath, kept outside the fixed-height box (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+  test(`footer: pinned with the engine's own node beneath, kept outside the pinned column (${surface})`, { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
     engine(on, {}, false)
     await start($, surface)
     await run($, 'footer plan-checklist')
@@ -1074,7 +1090,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const root = await rootOf(ui)
     expect(root.props?.height).toBeUndefined()
     const pinned = await ui.find({ key: 'stack-pinned' })
-    expect(pinned?.props.height).toBe(20)
+    expect(pinned?.props.minHeight).toBe(20)
     expect((await ui.find({ key: 'stack-footer' }))?.text).toContain('Plan 2/4')
     expect(sectionsOf((await ui.findAll({ type: 'Text' })).map(t => t.text))).toEqual(['Ideas', 'Plan 2/4'])
     await ui.unmount()

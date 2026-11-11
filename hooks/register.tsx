@@ -395,53 +395,6 @@ const zoneCommand = async ($: EngineInterface, zone: 'order' | 'header' | 'foote
   return `${done}\n${show(numbered(next, flags, lastBeneath))}`
 }
 
-// Rows a tree takes in `columns` cells, estimated from its shape and text.
-// Used only to tell whether everything fits so the footer can be pinned; it
-// errs on the high side (a row of several pieces counts as its text laid out
-// end to end, or its tallest piece), because a high guess only means "do not
-// pin", while a low one would cut rows off.
-export const estimateRows = (node: unknown, columns: number): number => {
-  const width = Math.max(1, columns)
-  const wrap = (text: string, truncate: boolean): number =>
-    text === '' ? 0 : text.split('\n').reduce((sum, line) => sum + (truncate ? 1 : Math.max(1, Math.ceil(line.length / width))), 0)
-  const textOf = (n: unknown): string => {
-    if (n === null || n === undefined || typeof n === 'boolean') return ''
-    if (typeof n === 'string' || typeof n === 'number') return String(n)
-    if (Array.isArray(n)) return n.map(textOf).join('')
-    if (typeof n !== 'object') return ''
-    const el = n as Node
-    const label = el.props?.label ?? el.props?.text ?? el.props?.value ?? el.props?.source
-    return (typeof label === 'string' ? label : '') + textOf(el.children)
-  }
-  const num = (v: unknown): number => (typeof v === 'number' && v > 0 ? v : 0)
-  const rows = (n: unknown): number => {
-    if (n === null || n === undefined || typeof n === 'boolean') return 0
-    if (typeof n === 'string' || typeof n === 'number') return wrap(String(n), false)
-    if (Array.isArray(n)) return n.reduce((sum: number, c) => sum + rows(c), 0)
-    if (typeof n !== 'object') return 0
-    const el = n as Node
-    const p = el.props ?? {}
-    if (typeof p.height === 'number') return p.height
-    const kids = (el.children ?? []).filter(c => hasContent(c) || (c !== null && typeof c === 'object' && typeof (c as Node).props?.height === 'number'))
-    if (el.type === 'Text') {
-      const truncate = typeof p.wrap === 'string' && p.wrap.startsWith('truncate')
-      return wrap(textOf(el.children), truncate)
-    }
-    if (el.type !== 'Box') return Math.max(1, wrap(textOf(el), false)) + (p.borderStyle !== undefined ? 2 : 0)
-    const edges =
-      num(p.padding) * 2 + num(p.paddingY) * 2 + num(p.paddingTop) + num(p.paddingBottom) +
-      num(p.margin) * 2 + num(p.marginY) * 2 + num(p.marginTop) + num(p.marginBottom) +
-      (p.borderStyle !== undefined ? 2 : 0)
-    if (p.flexDirection === 'row' || p.flexDirection === 'row-reverse') {
-      if (kids.length === 0) return edges
-      return edges + Math.max(wrap(textOf(kids), false), ...kids.map(rows))
-    }
-    const gap = num(p.gap) + num(p.rowGap)
-    return edges + kids.reduce((sum: number, c) => sum + rows(c), 0) + gap * Math.max(0, kids.length - 1)
-  }
-  return rows(node)
-}
-
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     // A new session: nothing drawn in it yet.
@@ -561,13 +514,10 @@ export const register: Register = on => {
     // would otherwise draw above the header).
     const listed = new Set([...(z.header ?? []), ...(z.order ?? []), ...(z.footer ?? [])])
     const aboveSlots = GUESTS.filter(n => !listed.has(n) && !sections.has(n)).map(take)
-    // Size unknown: a known guest drawing above side-stack (its section lands in
-    // a slot, or around this whole tree, after this hook returns).
-    const unknownSize = GUESTS.some(n => flags[n] && !sections.has(n))
     const header = (z.header ?? []).map(take)
     const footer = (z.footer ?? []).map(take)
     // The engine's own drawing of the pane (an `engine` node) may not sit under
-    // a Box with a height: when pinned it goes after the fixed-height box.
+    // a Box with a height: when pinned it goes after the pinned column.
     const isEngine = (n: unknown) => n !== null && typeof n === 'object' && (n as Node).type === 'engine'
     const engineNodes = rest.filter(isEngine)
     const others = rest.filter(n => !isEngine(n))
@@ -576,12 +526,16 @@ export const register: Register = on => {
     const bodyBox = <Box key="stack-body" flexDirection="column">{body as RenderElement[]}</Box>
     const bodyWithEngine = <Box key="stack-body" flexDirection="column">{[...body, ...engineNodes] as RenderElement[]}</Box>
     const footerBox = <Box key="stack-footer" flexDirection="column" flexShrink={0}>{footer as RenderElement[]}</Box>
-    // The footer is pinned to the bottom of a docked pane while everything
-    // fits its room; otherwise one plain column that scrolls, nothing cut.
+    // The footer is pinned to the bottom of a docked pane: the column takes at
+    // least the pane's height (minHeight, not height), the top grows into the
+    // spare room and the footer sits under it. Content taller than the pane
+    // makes the column grow instead, so nothing is cut and no size has to be
+    // known. That matters because a guest loaded before side-stack fills its
+    // slot after this hook returns, so its size is never known here.
+    // A footer guest drawing above side-stack still counts as footer content.
     const room = e.props.scroll?.bodyRows ?? 0
-    const isPinned =
-      e.props.placement === 'dock' && room > 0 && !unknownSize && hasContent(footer) &&
-      estimateRows([header, body, footer], e.props.bodyColumns) <= room
+    const footerDraws = hasContent(footer) || (z.footer ?? []).some(n => flags[n] === true)
+    const isPinned = e.props.placement === 'dock' && room > 0 && footerDraws
     if (!isPinned) {
       return (
         <Box flexDirection="column">
@@ -593,8 +547,8 @@ export const register: Register = on => {
     }
     return (
       <Box flexDirection="column">
-        <Box key="stack-pinned" flexDirection="column" height={room}>
-          <Box key="stack-top" flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">
+        <Box key="stack-pinned" flexDirection="column" minHeight={room}>
+          <Box key="stack-top" flexDirection="column" flexGrow={1}>
             {headerBox}
             {bodyBox}
           </Box>

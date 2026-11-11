@@ -132,12 +132,12 @@ Each list replaces that zone and keeps its own order; a section you move leaves 
 They are saved as `header` and `footer` in the settings file (`null` = empty). The pane shows the
 header on top, then the body, then the footer.
 
-With the pane docked beside the transcript (fullscreen terminal) and everything fitting its height,
-the footer stays at the bottom of the pane and the space is left between body and footer. When the
-sections do not fit, the pane is inline (above the prompt), or a guest loaded before side-stack draws
-in the pane (side-stack cannot measure its section, see below), the zones show as one plain column
-that scrolls, so no row is ever cut off. Whether everything fits is an estimate from the sections'
-text and layout, made on the high side: in doubt the footer is not pinned.
+With the pane docked beside the transcript (fullscreen terminal), the footer stays at the bottom of
+the pane and the space is left between body and footer. This works in any plugin load order: the
+zones sit in a column that is at least the pane's height and grows when the sections are taller, so
+nothing has to be measured (a guest loaded before side-stack fills its section after side-stack has
+drawn) and no row is ever cut off. When the sections are taller than the pane, the footer simply
+follows the body and the pane scrolls. Inline (above the prompt) the zones show as one plain column.
 
 How it works: in the drawing chain, plugins loaded earlier wrap the ones loaded later. side-stack
 takes each guest's section out of what is drawn beneath it and puts them back in your order. For a
@@ -293,6 +293,9 @@ Guests go back to their own panes from the next session.
   and assumptions-pane pinned at the bottom of the docked pane. That run found that the engine
   refuses its own node (what `next(e)` returns at the bottom) under a Box with a height, so side-stack
   keeps it outside the pinned box; a test covers it. Not checked in the desktop app.
+- Pinning in any load order (0.4.5): the pinned column uses `minHeight` instead of a fixed height
+  and an estimate, so a guest loaded before side-stack no longer turns pinning off. Covered by the
+  tests (footer guest and body guest loaded before side-stack, content taller than the pane).
 
 ## Credits
 
