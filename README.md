@@ -296,6 +296,14 @@ Guests go back to their own panes from the next session.
 - Pinning in any load order (0.4.5): the pinned column uses `minHeight` instead of a fixed height
   and an estimate, so a guest loaded before side-stack no longer turns pinning off. Covered by the
   tests (footer guest and body guest loaded before side-stack, content taller than the pane).
+- Audit fixes (0.4.6), each covered by a test: the install hint shows again with nothing but the
+  engine's own (empty) node beneath (checked in Claude Code 2.1.322 that it always sends one);
+  `/stack order`, `header` and `footer` apply their change to the file as it is at the moment of
+  writing, so a zone another session saved meanwhile is kept (the engine has no lock or rename, so
+  two writes in the same instant can still race); a guest Box without a key that has a border,
+  padding or a row layout is kept whole when an order is set; unreadable session state no longer
+  stops the pane drawing; a network home (`\\server\share`) gets a clear answer, since plugins
+  cannot write there. CI pins the Claude Code version it tests against.
 
 ## Credits
 
