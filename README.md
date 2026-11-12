@@ -226,15 +226,16 @@ The protocol, version 4:
 
    Start the section with a one-line heading (`Ideas`, `Assumptions`, `Plan 2/4`) so stacked parts
    are told apart.
-5. **Bring the stack forward.** `$.ui.panes()` lists only your own panes, and the types do not say
-   that `$.ui.open({ id: 'side-stack' })` from a guest reaches side-stack's pane rather than opening
-   one of the guest's own, so do not rely on it. The supported way is to run the host's command: `void $.command.run({ command: 'stack' }).catch(() => {})`. Per the API types (2.1.319),
-   `$.command.run` is queued and runs once the session is idle, shows its line in the transcript
-   ("Stack pane opened."), and rejects when called inside a hook the turn or session start waits
-   on, so do not await it there. Whether a pane opened from a plugin-run command counts as "asked"
-   (placed at any width) has not been tried. The types list "a queued prompt" among the things that
-   are not asking, so in the terminal expect the 144-column rule; if it does not show, fall back to
-   your own pane.
+5. **Bring the stack forward, silently.** Declare a number `showStack` in your own state and write
+   it one higher (`update($, showStack, n => (n ?? 0) + 1)`). side-stack (0.4.7 and later) hooks
+   that write, opens its pane with `$.ui.open` and answers by writing the same number to
+   `{ plugin: 'side-stack', key: 'shownFor' }`. Nothing shows in the chat. side-stack hooks the
+   write by plugin name, so a new guest is added to its `state.set` hook. Read `shownFor` from a
+   later timer tick; if it does not match, you face an older side-stack: running its command,
+   `void $.command.run({ command: 'stack' }).catch(() => {})`, still works, but it shows as a
+   prompt in the chat ("Prompt from the <guest> plugin"), is queued until the session is idle and
+   rejects inside a hook the turn waits on. Opened this way the pane is "unasked": in the terminal
+   it shows from 144 columns (110 once opened before) and waits below that.
 6. **side-stack absent:** behave as you do alone: your own pane, your own tab.
 
 ## How it works
