@@ -11,12 +11,15 @@ declare module 'claude-code' {
       // Where each section goes (plugin names; null = empty, or install order for `order`).
       zones: { order: string[] | null; header: string[] | null; footer: string[] | null }
       setUpFor: string
+      // The last guest ask (its `showStack` number) answered by opening the pane.
+      shownFor: number
     }
     // Each known guest's own flag, written by that guest: true while it draws
     // its section into the pane `side-stack`. side-stack only reads them.
     'assumptions-pane': { stacked: boolean }
     'idea-shelf': { stacked: boolean }
-    'plan-checklist': { stacked: boolean }
+    // plan-checklist also counts up `showStack` to ask for the pane (see register.tsx).
+    'plan-checklist': { stacked: boolean; showStack: number }
     'clean-view': { stacked: boolean }
   }
 }

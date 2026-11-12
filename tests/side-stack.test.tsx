@@ -1194,3 +1194,38 @@ test('/stack order with a network home says plugins cannot write there', async (
   expect(answer).toContain('network path')
   expect(writes).toEqual([])
 })
+
+// A guest asks for the pane by counting up its own showStack; /ask answers
+// what side-stack wrote back in shownFor.
+const asker = (tier?: 'prepend' | 'append') => ({
+  name: 'plan-checklist',
+  ...(tier !== undefined ? { tier } : {}),
+  register(on: On) {
+    on('session.start', async ($, e, next) => {
+      await $.command.register({ name: 'ask', description: 'test: ask for the pane' })
+      return next(e)
+    })
+    on('command.run', { command: 'ask' }, async $ => {
+      await $.state.set({ plugin: 'plan-checklist', key: 'showStack' }, 7)
+      const { value } = await $.state.get({ plugin: 'side-stack', key: 'shownFor' })
+      return { text: 'shownFor=' + String(value ?? 0) }
+    })
+  },
+})
+
+for (const tier of [undefined, 'prepend', 'append'] as const) {
+  test(`a guest's showStack ask opens the pane with no /stack run and is answered (${tier ?? 'default'} order)`, { plugins: [asker(tier)] }, async ($, on) => {
+    const { opened } = engine(on)
+    const ran: string[] = []
+    on('command.run', async (_$, e) => {
+      ran.push((e as { command: string }).command)
+      return { text: '' } as never
+    })
+    await start($)
+    opened.length = 0
+    const answer = await $.command.run({ command: 'ask', args: '' } as never)
+    expect(JSON.stringify(answer)).toContain('shownFor=7')
+    expect(opened).toEqual([expect.objectContaining({ id: 'side-stack', title: 'Stack' })])
+    expect(ran).not.toContain('stack')
+  })
+}

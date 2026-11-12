@@ -15,12 +15,21 @@ import type { EngineInterface, Register, RenderElement } from 'claude-code'
 //     there (false otherwise).
 // This host draws nothing of its own while a guest draws, and always includes
 // what next(e) returns, so every guest's section shows.
+//
+// Bringing the pane forward, silently: a guest that wants the pane shown
+// writes its own counter { plugin: '<guest>', key: 'showStack' } one higher.
+// side-stack hooks that write, opens its pane with $.ui.open and answers by
+// writing the same number to { plugin: 'side-stack', key: 'shownFor' }. No
+// /stack prompt shows in the chat. A guest that reads no answer (an older
+// side-stack) may fall back to running /stack.
 
 export const PANE_ID = 'side-stack'
 export const DEFAULT_TITLE = 'Stack'
 export const GUESTS = ['assumptions-pane', 'idea-shelf', 'plan-checklist', 'clean-view'] as const
 
 const present = atom({ plugin: 'side-stack', key: 'present' } as const, false)
+// The last guest ask (its showStack number) this host answered by opening the pane.
+const shownFor = atom({ plugin: 'side-stack', key: 'shownFor' } as const, 0)
 
 // Each known guest's own flag: true while it draws its section into the stack.
 // Only the guest writes it; side-stack reads it while drawing, which redraws the
@@ -491,6 +500,24 @@ export const register: Register = on => {
       return { text: `${cfg.title} pane not opened: ${String(err instanceof Error ? err.message : err).slice(0, 200)}` }
     }
   })
+
+  // A guest asking for the pane by its counter: open it with no prompt in the
+  // chat, then answer with the same number. Only watched; the write goes on.
+  on('state.set', { plugin: 'plan-checklist', key: 'showStack' }, async ($, e, next) => {
+    const result = await next(e)
+    const ask = (e as { value?: unknown }).value
+    if (typeof ask !== 'number') return result
+    try {
+      const cfg = await readConfig($)
+      // Not awaited: a pane that waits for a wider terminal holds nothing up.
+      void $.ui.open({ id: PANE_ID, title: cfg.title }).catch(() => undefined)
+      await update($, present, () => true)
+      await update($, shownFor, () => ask)
+    } catch {
+      // No answer: the guest falls back on its own.
+    }
+    return result
+  }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
     const { Box, Text } = $.ui.resolve(e)
