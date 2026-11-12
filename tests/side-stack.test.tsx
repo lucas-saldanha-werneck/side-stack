@@ -30,11 +30,11 @@ const OWNERS: Record<string, string> = { stack: 'side-stack', assumptions: 'assu
 // the files that exist (POSIX paths) with their text; writes are recorded,
 // not made. Every `$.ui.open` is recorded too.
 // `drawsPane` false leaves ui.render to the test's own stand-in.
-// `openFails` makes every `$.ui.open` reject.
-const engine = (on: On, have: Record<string, string> = {}, drawsPane = true, openFails = false): { writes: Write[]; opened: Opened[] } => {
+// `openFails` makes every `$.ui.open` reject. `env` is the environment.
+const engine = (on: On, have: Record<string, string> = {}, drawsPane = true, openFails = false, env: Record<string, string> = { HOME: '/home/u' }): { writes: Write[]; opened: Opened[] } => {
   const writes: Write[] = []
   const opened: Opened[] = []
-  mock.env(on, { HOME: '/home/u' })
+  mock.env(on, env)
   on('session.start', async (_$, e) => ({ cwd: (e as { cwd: string }).cwd }) as never)
   // The engine knows which plugin registered a command; the event does not say,
   // so this stand-in names the owner from the command's name, as a marketplace
@@ -1096,3 +1096,101 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await ui.unmount()
   })
 }
+
+// ---- audit fixes (0.4.6)
+
+// SS-03: at the bottom of the chain the engine always answers an `engine` node
+// (seen on 2.1.322), which draws nothing by itself: the hint must still show.
+test('with no guest and the engine node beneath, the pane still shows which plugins fill it', async ($, on) => {
+  engine(on, {}, false)
+  await start($)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Text', text: /to fill this pane/ })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+// SS-01: another session saves a zone between this command's read and its
+// write; only the zone this command changes is written.
+test('/stack order keeps a zone another session saved meanwhile', { plugins: [PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+  const have: Record<string, string> = { [CONFIG]: JSON.stringify({ header: ['idea-shelf'] }) }
+  const { writes } = engine(on, have)
+  // Session state, so the test can act between the command's read of the file
+  // and its write: the command reads the guests' flags in between.
+  const state: Record<string, unknown> = {}
+  let armed = false
+  on('state.get', async (_$, e) => {
+    const a = e as { plugin: string; key: string }
+    if (armed && a.plugin === 'plan-checklist' && a.key === 'stacked') {
+      armed = false
+      have[CONFIG] = JSON.stringify({ header: ['idea-shelf'], footer: ['plan-checklist'] })
+    }
+    return { value: { value: state[`${a.plugin}.${a.key}`], version: 0 } } as never
+  })
+  on('state.set', async (_$, e) => {
+    const a = e as { plugin: string; key: string; value: unknown }
+    state[`${a.plugin}.${a.key}`] = a.value
+    return { value: { isSet: true, version: 1 } } as never
+  })
+  await start($)
+  armed = true
+  expect(await run($, 'order assumptions-pane')).toContain('Order: assumptions-pane')
+  expect(armed).toBe(false)
+  expect(saved(writes, 'footer')).toEqual(['plan-checklist'])
+  expect(saved(writes, 'header')).toEqual(['idea-shelf'])
+  expect(saved(writes, 'order')).toEqual(['assumptions-pane'])
+})
+
+// SS-02: a guest without the v4 key that wraps its section in a styled Box.
+const BORDER_BELOW = {
+  name: 'clean-view',
+  tier: 'append' as const,
+  register(on: On) {
+    on('ui.render', { component: 'Pane', requestId: 'side-stack' }, async ($, e, next) => {
+      const { Box, Text } = $.ui.resolve(e)
+      return <Box flexDirection="column"><Box borderStyle="round" paddingX={1}><Text>Bordered</Text></Box>{await next(e)}</Box>
+    })
+  },
+}
+test('a set order keeps the border and padding of a guest Box without a key', { plugins: [BORDER_BELOW, PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
+  engine(on)
+  await start($)
+  await run($, 'order idea-shelf,plan-checklist')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const boxes = await ui.findAll({ type: 'Box' })
+  const bordered = boxes.find(b => b.props.borderStyle === 'round')
+  expect(bordered?.props.paddingX).toBe(1)
+  expect(bordered?.text).toContain('Bordered')
+  expect(sectionsOf((await ui.findAll({ type: 'Text' })).map(t => t.text))).toEqual(['Ideas', 'Plan 2/4'])
+  await ui.unmount()
+})
+
+// SS-05: unreadable session state does not break the pane.
+test('the pane still draws when the zones cannot be read from session state', async ($, on) => {
+  engine(on)
+  let refused = 0
+  on('state.get', async (_$, e) => {
+    const a = e as { plugin: string; key: string }
+    if (a.plugin === 'side-stack' && a.key === 'zones') {
+      refused++
+      return { deny: 'corrupt' } as never
+    }
+    return { value: { value: undefined, version: 0 } } as never
+  })
+  on('state.set', async () => ({ value: { isSet: true, version: 1 } }) as never)
+  await start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /to fill this pane/ })).toBeDefined()
+  await ui.unmount()
+  expect(refused).toBeGreaterThan(0)
+})
+
+// SS-06: a network HOME cannot hold the settings file; the answer says why.
+test('/stack order with a network home says plugins cannot write there', async ($, on) => {
+  const { writes } = engine(on, {}, true, false, { HOME: '\\\\server\\home\\u' })
+  await start($)
+  const answer = await run($, 'order idea-shelf')
+  expect(answer).toContain('network path')
+  expect(writes).toEqual([])
+})

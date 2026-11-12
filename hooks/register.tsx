@@ -76,14 +76,17 @@ const home = async ($: EngineInterface): Promise<string | undefined> => {
 }
 
 // POSIX /x, Windows C:\x or C:/x. A relative path would land in the session's folder.
-const isAbsolute = (p: string): boolean => p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p)
+// A network path (\\server\share or //server/share) is not one: the engine's file
+// calls never touch a network location, so a settings file there cannot be kept.
+const isNetwork = (p: string): boolean => /^[\\/][\\/]/.test(p)
+const isAbsolute = (p: string): boolean => !isNetwork(p) && (p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p))
 
 // $XDG_CONFIG_HOME/side-stack/config.json, else ~/.config/side-stack/config.json.
 // A relative XDG_CONFIG_HOME is ignored, as the XDG spec says.
 const settingsFile = async ($: EngineInterface): Promise<string | undefined> => {
   const xdg = await $.env.get('XDG_CONFIG_HOME')
   const h = await home($)
-  const base = xdg !== undefined && isAbsolute(xdg) ? xdg : h !== undefined ? `${h}/.config` : undefined
+  const base = xdg !== undefined && (isAbsolute(xdg) || isNetwork(xdg)) ? xdg : h !== undefined ? `${h}/.config` : undefined
   return base === undefined ? undefined : `${base}/side-stack/config.json`
 }
 
@@ -139,8 +142,14 @@ const readConfig = async ($: EngineInterface): Promise<Config> => {
   return cfg
 }
 
+// The engine's own drawing of a pane: `next(e)` at the bottom of the chain
+// always answers one ({ type: 'engine', ref }, seen on 2.1.322), even when it
+// draws nothing.
+const isEngine = (n: unknown): boolean => n !== null && typeof n === 'object' && (n as { type?: unknown }).type === 'engine'
+
 // True when the tree draws something a person can see: a word, or any element
-// other than a layout Box or a Text (a Button, an Input, a Markdown...).
+// other than a layout Box, a Text or a bare engine node (a Button, an Input, a
+// Markdown...).
 export const hasContent = (node: unknown): boolean => {
   if (node === null || node === undefined || typeof node === 'boolean') return false
   if (typeof node === 'string') return node.trim() !== ''
@@ -148,6 +157,7 @@ export const hasContent = (node: unknown): boolean => {
   if (Array.isArray(node)) return node.some(hasContent)
   if (typeof node !== 'object') return false
   const el = node as { type?: unknown; children?: unknown }
+  if (el.type === 'engine') return hasContent(el.children)
   if (el.type !== 'Box' && el.type !== 'Text') return true
   return hasContent(el.children)
 }
@@ -157,6 +167,20 @@ type Node = { type?: unknown; props?: Record<string, unknown>; children?: unknow
 const keyOf = (n: unknown): string | undefined => {
   const k = n !== null && typeof n === 'object' ? (n as Node).props?.key : undefined
   return typeof k === 'string' ? k : undefined
+}
+
+// A Box that only stacks its children in a column (no border, padding, colour,
+// size or row): taking it apart changes nothing that shows.
+const isPlain = (el: Node): boolean =>
+  Object.entries(el.props ?? {}).every(([name, value]) => name === 'key' || name === 'children' || (name === 'flexDirection' && value === 'column'))
+
+// Whether a v4 section sits anywhere inside the tree.
+const holdsSection = (n: unknown): boolean => {
+  if (Array.isArray(n)) return n.some(holdsSection)
+  if (n === null || typeof n !== 'object') return false
+  const k = keyOf(n)
+  if (k !== undefined && k.startsWith(SECTION) && !k.startsWith(SLOT)) return true
+  return holdsSection((n as Node).children)
 }
 
 // Splits the tree drawn beneath side-stack into the v4 sections (by guest
@@ -175,12 +199,14 @@ export const extractSections = (node: unknown): { sections: Map<string, unknown>
       return
     }
     const el = n as Node | null
-    if (el !== null && typeof el === 'object' && el.type === 'Box' && k === undefined) {
-      // a plain wrapper: its children are what counts
+    if (el !== null && typeof el === 'object' && el.type === 'Box' && k === undefined && (isPlain(el) || holdsSection(el))) {
+      // a plain wrapper, or one around sections: its children are what counts
       ;(el.children ?? []).forEach(walk)
       return
     }
-    if (hasContent(n)) rest.push(n)
+    // The engine's own node is kept even when it draws nothing: it is the
+    // engine's body of the pane.
+    if (hasContent(n) || isEngine(n)) rest.push(n)
   }
   walk(node)
   return { sections, rest }
@@ -307,32 +333,37 @@ export const numbered = (z: Zones, flags: Record<string, boolean>, beneath: read
   return { header, body: [...above, ...listed, ...drawn, ...others], footer }
 }
 
-// Writes the zones into the settings file, keeping every other key. A file
-// that is there but is not a JSON object is left alone (the error says so).
-const saveZones = async ($: EngineInterface, z: Zones): Promise<string | undefined> => {
+// Applies `change` to the zones as the settings file holds them right now and
+// writes the result back, keeping every other key; answers the zones written,
+// or why nothing was. Read just before the write, so a change another session
+// saved in between is kept (the engine has no lock or rename to do better). A
+// file that is there but is not a JSON object is left alone (the error says so).
+const saveZones = async ($: EngineInterface, change: (now: Zones) => Zones): Promise<{ zones: Zones } | { failed: string }> => {
   const file = await settingsFile($)
-  if (file === undefined || !isAbsolute(file)) return 'no home folder to keep the settings file in'
+  if (file !== undefined && isNetwork(file)) return { failed: `${file} is on a network path, which plugins cannot write; set XDG_CONFIG_HOME to a local folder` }
+  if (file === undefined || !isAbsolute(file)) return { failed: 'no home folder to keep the settings file in' }
   let cfg: Record<string, unknown>
   try {
     if (await $.fs.exists(file)) {
       const raw: unknown = JSON.parse(await $.fs.read(file))
-      if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return `${file} is not a JSON object; fix it first`
+      if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { failed: `${file} is not a JSON object; fix it first` }
       cfg = raw as Record<string, unknown>
     } else {
       cfg = JSON.parse(CONFIG_EXAMPLE) as Record<string, unknown>
     }
   } catch {
-    return `${file} could not be read as JSON; fix it first`
+    return { failed: `${file} could not be read as JSON; fix it first` }
   }
+  const z = change(cleanZones(cfg))
   cfg.order = z.order
   cfg.header = z.header
   cfg.footer = z.footer
   try {
     await $.fs.write(file, JSON.stringify(cfg, null, 2) + '\n')
   } catch (err) {
-    return `could not write ${file}: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`
+    return { failed: `could not write ${file}: ${String(err instanceof Error ? err.message : err).slice(0, 200)}` }
   }
-  return undefined
+  return { zones: z }
 }
 
 const HELP =
@@ -354,11 +385,12 @@ const zoneCommand = async ($: EngineInterface, zone: 'order' | 'header' | 'foote
     return [...group('Header', v.header, '(empty)'), ...group('Body', v.body, '(empty)'), ...group('Footer', v.footer, '(empty)')].join('\n')
   }
   if (arg === '') return `${show(view)}\n${HELP}`
-  let next: Zones
+  // The change, applied to the zones as saved at the moment of writing.
+  let change: (now: Zones) => Zones
   if (zone === 'order' && arg === 'reset') {
-    next = NO_ZONES
+    change = () => NO_ZONES
   } else if (zone !== 'order' && arg === 'none') {
-    next = { ...current, [zone]: null }
+    change = now => ({ ...now, [zone]: null })
   } else {
     const asked: string[] = []
     for (const word of arg.split(/[\s,]+/).filter(w => w !== '')) {
@@ -376,10 +408,11 @@ const zoneCommand = async ($: EngineInterface, zone: 'order' | 'header' | 'foote
     if (list === null) return `Not changed: nothing given. Known: ${names.join(', ')}`
     // The listed items leave whatever zone they were in.
     const drop = (z: string[] | null) => cleanOrder((z ?? []).filter(n => !list.includes(n)))
-    next = { order: drop(current.order), header: drop(current.header), footer: drop(current.footer), [zone]: list }
+    change = now => ({ order: drop(now.order), header: drop(now.header), footer: drop(now.footer), [zone]: list })
   }
-  const failed = await saveZones($, next)
-  if (failed !== undefined) return `Not changed: ${failed}`
+  const saved = await saveZones($, change)
+  if ('failed' in saved) return `Not changed: ${saved.failed}`
+  const next = saved.zones
   cachedZones = next
   try {
     await update($, zones, () => next)
@@ -388,7 +421,7 @@ const zoneCommand = async ($: EngineInterface, zone: 'order' | 'header' | 'foote
   }
   $.ui.invalidate('ui.render')
   const done =
-    next === NO_ZONES ? 'Reset: install order, no header, no footer.'
+    zone === 'order' && arg === 'reset' ? 'Reset: install order, no header, no footer.'
     : zone === 'order' ? `Order: ${(next.order ?? []).join(', ')}. Sections not listed follow in install order.`
     : next[zone] === null ? `${zone === 'header' ? 'Header' : 'Footer'}: empty; its sections are back in the body.`
     : `${zone === 'header' ? 'Header' : 'Footer'}: ${(next[zone] ?? []).join(', ')}.`
@@ -473,7 +506,7 @@ export const register: Register = on => {
     lastBeneath = [...sections.keys()]
     // Read for the subscription (a change redraws the pane); the module copy
     // is what counts, since session state is empty after a /clear.
-    const fromState = await read($, zones)
+    const fromState = await read($, zones).catch(() => NO_ZONES)
     if (cachedZones === undefined) {
       const fromFile = (await readConfig($)).zones
       cachedZones = fromFile.order !== null || fromFile.header !== null || fromFile.footer !== null ? fromFile : fromState
@@ -518,7 +551,6 @@ export const register: Register = on => {
     const footer = (z.footer ?? []).map(take)
     // The engine's own drawing of the pane (an `engine` node) may not sit under
     // a Box with a height: when pinned it goes after the pinned column.
-    const isEngine = (n: unknown) => n !== null && typeof n === 'object' && (n as Node).type === 'engine'
     const engineNodes = rest.filter(isEngine)
     const others = rest.filter(n => !isEngine(n))
     const body = [...aboveSlots, ...(z.order ?? []).map(take), ...sections.values(), ...others]
