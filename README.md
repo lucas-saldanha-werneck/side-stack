@@ -73,6 +73,15 @@ Each guest works alone too. Without side-stack, it opens its own pane and its ow
   top or the bottom, each zone in its own order; `/stack header none` and `/stack footer none` empty
   a zone; `/stack order reset` puts everything back. Numbers, names, or a mix (`plan-checklist,2`).
 
+## Examples
+
+- You install side-stack and idea-shelf. At session start one pane titled Stack opens, with the
+  Ideas section inside it.
+- You type `/stack` to open it at any width.
+- You type `/stack order 3,1,2` to reorder the body, or `/stack header 1` to pin a section to the top;
+  `/stack order reset` puts everything back.
+- With no other plugin installed, the pane shows one dim line with the command that installs each.
+
 ## Settings
 
 The first session creates `~/.config/side-stack/config.json` (or `$XDG_CONFIG_HOME/side-stack/config.json`)
