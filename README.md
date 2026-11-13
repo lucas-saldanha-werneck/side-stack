@@ -3,6 +3,7 @@
 [![CI](https://github.com/lucas-saldanha-werneck/side-stack/actions/workflows/test.yml/badge.svg)](https://github.com/lucas-saldanha-werneck/side-stack/actions/workflows/test.yml)
 [![License](https://img.shields.io/github/license/lucas-saldanha-werneck/side-stack)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.4.8-blue)](CHANGELOG.md)
+[![plugin score (proposal)](https://img.shields.io/badge/plugin%20score%20(proposal)-98.0%20A-brightgreen)](https://github.com/NVIDIA/SkillEvaluator/issues/508)
 
 A Claude Code mod that opens one side pane, titled Stack, where the other side panes stack one under
 the other, instead of one tab each.
