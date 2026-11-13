@@ -4,7 +4,7 @@ Versions are the `version` in `.claude-plugin/plugin.json`. Newest first.
 
 ## 0.4.8 (2026-11-13)
 
-- Add README Examples section and bump patch version.
+- README: add an Examples section.
 
 ## 0.4.7 (2026-11-12)
 
@@ -12,7 +12,8 @@ Versions are the `version` in `.claude-plugin/plugin.json`. Newest first.
 
 ## 0.4.6 (2026-11-12)
 
-- Audit fixes: install hint with the engine node, safer zone saves.
+- The install hint shows again on an empty pane; `/stack order|header|footer` save against the current file.
+- Unreadable zones in session state no longer stop the pane drawing.
 
 ## 0.4.5 (2026-11-11)
 
@@ -20,11 +21,11 @@ Versions are the `version` in `.claude-plugin/plugin.json`. Newest first.
 
 ## 0.4.4 (2026-11-11)
 
-- Point to the catalog repo's new name, lucas-tools.
+- Point to the catalog repo's new name, `lucas-tools`.
 
 ## 0.4.3 (2026-11-11)
 
-- Rename the marketplace to lucas-tools.
+- Catalog renamed to `lucas-tools`.
 
 ## 0.4.2 (2026-11-09)
 
@@ -32,7 +33,7 @@ Versions are the `version` in `.claude-plugin/plugin.json`. Newest first.
 
 ## 0.4.1 (2026-11-09)
 
-- Polish: one-line description, catalog install, README headings.
+- One-line description, catalog install steps, README headings.
 
 ## 0.4.0 (2026-11-09)
 
@@ -60,7 +61,8 @@ Versions are the `version` in `.claude-plugin/plugin.json`. Newest first.
 
 ## 0.2.0 (2026-11-09)
 
-- Review fixes: hint follows guests' stacked flags, clean titles, protocol v2.
+- Side-stack protocol v2: the install hint hides only when a guest's stacked flag is set or it drew something.
+- Strip control characters from the configured title; a failed open in /stack answers with a line.
 
 ## 0.1.0 (2026-11-09)
 
