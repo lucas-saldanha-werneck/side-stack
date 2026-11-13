@@ -1,7 +1,21 @@
 # side-stack
 
+[![CI](https://github.com/lucas-saldanha-werneck/side-stack/actions/workflows/test.yml/badge.svg)](https://github.com/lucas-saldanha-werneck/side-stack/actions/workflows/test.yml)
+[![License](https://img.shields.io/github/license/lucas-saldanha-werneck/side-stack)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.4.8-blue)](CHANGELOG.md)
+
 A Claude Code mod that opens one side pane, titled Stack, where the other side panes stack one under
 the other, instead of one tab each.
+
+[![side-stack demo: tap to open the video](https://github.com/user-attachments/assets/13978e06-f6f8-405c-ab7e-1089e4340df2)](https://lucas-saldanha-werneck.github.io/side-stack/demo.mp4)
+
+<table>
+<tr>
+<td align="center"><img src="https://github.com/user-attachments/assets/16788b49-035e-40ff-8000-1a17731e24a1" alt="The Stack pane in a terminal with plan, ideas and assumptions" width="320"><br>In the terminal</td>
+<td align="center"><img src="https://github.com/user-attachments/assets/03f861e0-de48-4794-a038-c20a57cb9a5f" alt="The Stack pane in the Claude desktop app" width="320"><br>In the desktop app</td>
+<td align="center"><img src="https://github.com/user-attachments/assets/e6a35f95-802d-4add-b562-71bf5165c79b" alt="Summary: see every pane at once" width="320"><br>The idea in short</td>
+</tr>
+</table>
 
 ## Why
 
@@ -329,3 +343,7 @@ Claude Code.
 MIT. See `LICENSE`.
 
 Built with Claude Code
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for how to report a vulnerability and what this plugin accesses.
