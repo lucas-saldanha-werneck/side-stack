@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/lucas-saldanha-werneck/side-stack/actions/workflows/test.yml/badge.svg)](https://github.com/lucas-saldanha-werneck/side-stack/actions/workflows/test.yml)
 [![License](https://img.shields.io/github/license/lucas-saldanha-werneck/side-stack)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.5.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.5.1-blue)](CHANGELOG.md)
 [![plugin score (proposal)](https://img.shields.io/badge/plugin%20score%20(proposal)-98.0%20A-brightgreen)](https://github.com/NVIDIA/SkillEvaluator/issues/508)
 
 A Claude Code mod that opens one side pane, titled Stack, where the other side panes stack one under
@@ -261,9 +261,11 @@ The protocol, version 4:
    its heading alone.
 5. **Bring the stack forward, silently.** Declare a number `showStack` in your own state and write
    it one higher (`update($, showStack, n => (n ?? 0) + 1)`). side-stack hooks that write (0.4.7 and
-   later for plan-checklist; 0.5.0 and later for idea-shelf and assumptions-pane too), opens its pane with `$.ui.open` and answers by writing the same number to
-   `{ plugin: 'side-stack', key: 'shownFor' }`. Nothing shows in the chat. side-stack hooks the
-   write by plugin name, so a new guest is added to its `state.set` hook. Read `shownFor` from a
+   later for plan-checklist; 0.5.0 and later for idea-shelf and assumptions-pane too), opens its pane with `$.ui.open` and answers by writing the same number to your
+   entry of `{ plugin: 'side-stack', key: 'shownBy' }` (a map by guest name, 0.5.1 and later; for
+   plan-checklist also to `shownFor`, as 0.4.7 to 0.5.0 did). Each guest reads only its own answer,
+   so two guests asking at once do not read each other's number. Nothing shows in the chat. side-stack hooks the
+   write by plugin name, so a new guest is added to its `state.set` hook. Read your answer from a
    later timer tick; if it does not match, you face an older side-stack: running its command,
    `void $.command.run({ command: 'stack' }).catch(() => {})`, still works, but it shows as a
    prompt in the chat ("Prompt from the <guest> plugin"), is queued until the session is idle and

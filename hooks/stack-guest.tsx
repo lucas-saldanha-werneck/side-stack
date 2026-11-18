@@ -233,7 +233,10 @@ export async function hasSurface($: EngineInterface): Promise<boolean> {
 export type Ask = {
   /** Counts the guest's own `showStack` one up and resolves the new number. */
   ask: () => Promise<number>
-  /** Reads side-stack's `shownFor` (0.4.7 and later write it). */
+  /**
+   * Reads side-stack's answer to this guest: `shownBy[<guest>]` (0.5.1 and
+   * later), or `shownFor` for plan-checklist (0.4.7 and later write it for it).
+   */
   answer: () => Promise<number>
   /** No answer (an older side-stack): the guest's fallback, such as running /stack. */
   fallback: () => Promise<void>
@@ -245,7 +248,13 @@ export type Ask = {
  * `shownFor`. The answer is read on a later tick; with none, `fallback` runs.
  * Each step is its own dispatch, so it may start from any hook.
  */
+// An ask whose answer is not read yet, or a /stack fallback that has not run yet
+// (a command from a plugin waits until the session is idle): no second one meanwhile.
+let inFlight = false
+
 export function askForStack($: EngineInterface, how: Ask): void {
+  if (inFlight) return
+  inFlight = true
   const later = (fn: () => void): void => {
     try {
       $.clock.after(0, fn)
@@ -261,6 +270,9 @@ export function askForStack($: EngineInterface, how: Ask): void {
       } catch {
         n = 0
       }
+      const done = (): void => {
+        inFlight = false
+      }
       later(() => {
         void (async () => {
           let answered = false
@@ -271,7 +283,8 @@ export function askForStack($: EngineInterface, how: Ask): void {
             answered = false
           }
           if (!answered) await how.fallback().catch(() => undefined)
-        })()
+          done()
+        })().catch(done)
       })
     })()
   })

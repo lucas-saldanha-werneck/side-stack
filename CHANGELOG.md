@@ -2,6 +2,11 @@
 
 Versions are the `version` in `.claude-plugin/plugin.json`. Newest first.
 
+## 0.5.1 (2026-11-18)
+
+- Answer each guest's showStack ask in its own entry, `shownBy[<guest>]`, so two guests asking at once never read each other's number (plan-checklist still gets `shownFor` too).
+- `stack-guest.tsx`: one ask (or one `/stack` fallback) at a time.
+
 ## 0.5.0 (2026-11-18)
 
 - New `hooks/stack-guest.tsx`: the guest protocol (presence, slot, drawn-once check, silent ask for the pane, the Remote Control rule) and the section heading in one file, copied byte for byte into each guest.
