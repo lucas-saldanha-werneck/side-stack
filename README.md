@@ -213,7 +213,11 @@ The protocol, version 4:
    the plugins after you still show. For the order to apply to you (v4), wrap your section in a Box
    keyed `side-stack:<your plugin>`, and when the tree beneath you holds an empty Box keyed
    `side-stack:slot:<your plugin>` (side-stack is beneath you and wants you there), return a copy of
-   that tree with the slot replaced by your section:
+   that tree with the slot replaced by your section. Since Claude Code 2.1.327 a `ui.render` hook
+   hears only its own plugin's drawings unless its matcher names `plugin`, so the matcher must say
+   `plugin: '*'` (side-stack opens this pane, not you). Builds before that know no `plugin` key on a
+   Pane: to keep them, register the same top-level hook a second time without it, and return
+   `next(e)` unchanged when the tree beneath already holds your section, so it is drawn once:
 
    ```tsx
    type N = { props?: Record<string, unknown>; children?: unknown[] }
@@ -233,7 +237,7 @@ The protocol, version 4:
      return undefined
    }
 
-   on('ui.render', { component: 'Pane', requestId: 'side-stack' }, async ($, e, next) => {
+   on('ui.render', { component: 'Pane', requestId: 'side-stack', plugin: '*' }, async ($, e, next) => {
      const { Box, Text } = $.ui.resolve(e)
      const section = (
        <Box key="side-stack:idea-shelf" flexDirection="column">

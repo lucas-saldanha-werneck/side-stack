@@ -9,8 +9,10 @@ import type { EngineInterface, Register, RenderElement } from 'claude-code'
 //   - side-stack is present when the atom { plugin: 'side-stack', key: 'present' }
 //     is true AND $.command.list() lists `stack` from plugin side-stack (there is
 //     no unload event, so the flag alone can outlive the plugin);
-//   - then hook ui.render on { component: 'Pane', requestId: 'side-stack' } and
-//     return <Box flexDirection="column">{section}{await next(e)}</Box>;
+//   - then hook ui.render on { component: 'Pane', requestId: 'side-stack', plugin: '*' }
+//     and return <Box flexDirection="column">{section}{await next(e)}</Box>
+//     (Claude Code 2.1.327+ hears only a plugin's own drawings unless the matcher
+//     names `plugin`; older builds need the same hook without it, see README);
 //   - and set your own { plugin: '<guest>', key: 'stacked' } true while you draw
 //     there (false otherwise).
 // This host draws nothing of its own while a guest draws, and always includes
