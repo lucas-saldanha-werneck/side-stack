@@ -2,6 +2,10 @@
 
 Versions are the `version` in `.claude-plugin/plugin.json`. Newest first.
 
+## 0.4.9 (2026-11-18)
+
+- Guest guide: on Claude Code 2.1.327 and later a guest's hook must name `plugin: '*'` to draw in the Stack pane; how to keep older builds working too.
+
 ## 0.4.8 (2026-11-13)
 
 - README: add an Examples section.
