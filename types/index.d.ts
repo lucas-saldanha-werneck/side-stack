@@ -16,9 +16,9 @@ declare module 'claude-code' {
     }
     // Each known guest's own flag, written by that guest: true while it draws
     // its section into the pane `side-stack`. side-stack only reads them.
-    'assumptions-pane': { stacked: boolean }
-    'idea-shelf': { stacked: boolean }
-    // plan-checklist also counts up `showStack` to ask for the pane (see register.tsx).
+    // Each also counts up `showStack` to ask for the pane, silently (see register.tsx).
+    'assumptions-pane': { stacked: boolean; showStack: number }
+    'idea-shelf': { stacked: boolean; showStack: number }
     'plan-checklist': { stacked: boolean; showStack: number }
     'clean-view': { stacked: boolean }
   }

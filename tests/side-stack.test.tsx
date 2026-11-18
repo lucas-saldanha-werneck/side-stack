@@ -213,7 +213,7 @@ test('with no guest the pane shows which plugins fill it', async ($, on) => {
   for (const surface of ['terminal', 'desktop', 'mobile', 'vscode'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     const hint = await ui.find({ type: 'Text', text: /to fill this pane/ })
-    expect(hint?.text).toBe('Install assumptions-pane, idea-shelf, plan-checklist or clean-view to fill this pane:')
+    expect(hint?.text).toBe('Install one of these to fill this pane:')
     expect(hint?.props.dimColor).toBe(true)
     for (const name of ['assumptions-pane', 'idea-shelf', 'plan-checklist', 'clean-view']) {
       expect(await ui.find({ type: 'Text', text: `/plugin install ${name}@lucas-tools` })).toBeDefined()
@@ -739,8 +739,8 @@ test('/stack order with no list shows every known name, numbered, by zone', asyn
   engine(on)
   await start($)
   const answer = await run($, 'order')
-  expect(answer).toContain('Header: (empty)')
-  expect(answer).toContain('Footer: (empty)')
+  expect(answer).not.toContain('Header:')
+  expect(answer).not.toContain('Footer:')
   for (const [i, name] of ['assumptions-pane', 'idea-shelf', 'plan-checklist', 'clean-view'].entries()) {
     expect(answer).toContain(`${i + 1} · ${name} (not shown)`)
   }
@@ -931,8 +931,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await start($, surface)
     expect(sectionsOf(await textsOf($ as never, surface))).toEqual(['Assumptions', 'Ideas', 'Plan 2/4'])
     const shown = await run($, 'order')
-    expect(shown).toContain('Header: (empty)')
-    expect(shown).toContain('Footer: (empty)')
+    expect(shown).not.toContain('Header:')
+    expect(shown).not.toContain('Footer:')
   })
 
   test(`zones: header and footer from the settings file, a name in two zones kept in the first (${surface})`, { plugins: [ASSUME_ABOVE, PLAN_BELOW, IDEAS_BELOW] }, async ($, on) => {
@@ -1074,7 +1074,7 @@ test('/stack header with no list shows the numbered zones', async ($, on) => {
   engine(on)
   await start($)
   const answer = await run($, 'header')
-  expect(answer).toContain('Header: (empty)')
+  expect(answer).not.toContain('Header:')
   expect(answer).toContain('1 · assumptions-pane')
 })
 
@@ -1197,8 +1197,8 @@ test('/stack order with a network home says plugins cannot write there', async (
 
 // A guest asks for the pane by counting up its own showStack; /ask answers
 // what side-stack wrote back in shownFor.
-const asker = (tier?: 'prepend' | 'append') => ({
-  name: 'plan-checklist',
+const asker = (tier?: 'prepend' | 'append', name: 'plan-checklist' | 'idea-shelf' | 'assumptions-pane' = 'plan-checklist') => ({
+  name,
   ...(tier !== undefined ? { tier } : {}),
   register(on: On) {
     on('session.start', async ($, e, next) => {
@@ -1206,7 +1206,12 @@ const asker = (tier?: 'prepend' | 'append') => ({
       return next(e)
     })
     on('command.run', { command: 'ask' }, async $ => {
-      await $.state.set({ plugin: 'plan-checklist', key: 'showStack' }, 7)
+      // Each reference written out: the module scan reads only literal plugin and key.
+      // The register function runs on its own (no closure): the name comes from $.
+      const me = $.plugin.name.split('@')[0]
+      if (me === 'idea-shelf') await $.state.set({ plugin: 'idea-shelf', key: 'showStack' } as never, 7 as never)
+      else if (me === 'assumptions-pane') await $.state.set({ plugin: 'assumptions-pane', key: 'showStack' } as never, 7 as never)
+      else await $.state.set({ plugin: 'plan-checklist', key: 'showStack' }, 7)
       const { value } = await $.state.get({ plugin: 'side-stack', key: 'shownFor' })
       return { text: 'shownFor=' + String(value ?? 0) }
     })
@@ -1215,6 +1220,23 @@ const asker = (tier?: 'prepend' | 'append') => ({
 
 for (const tier of [undefined, 'prepend', 'append'] as const) {
   test(`a guest's showStack ask opens the pane with no /stack run and is answered (${tier ?? 'default'} order)`, { plugins: [asker(tier)] }, async ($, on) => {
+    const { opened } = engine(on)
+    const ran: string[] = []
+    on('command.run', async (_$, e) => {
+      ran.push((e as { command: string }).command)
+      return { text: '' } as never
+    })
+    await start($)
+    opened.length = 0
+    const answer = await $.command.run({ command: 'ask', args: '' } as never)
+    expect(JSON.stringify(answer)).toContain('shownFor=7')
+    expect(opened).toEqual([expect.objectContaining({ id: 'side-stack', title: 'Stack' })])
+    expect(ran).not.toContain('stack')
+  })
+}
+
+for (const guest of ['idea-shelf', 'assumptions-pane'] as const) {
+  test(`${guest}'s showStack ask opens the pane with no /stack run and is answered`, { plugins: [asker(undefined, guest)] }, async ($, on) => {
     const { opened } = engine(on)
     const ran: string[] = []
     on('command.run', async (_$, e) => {
