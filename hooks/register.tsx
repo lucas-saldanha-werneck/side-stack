@@ -1,5 +1,8 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderElement } from 'claude-code'
+import type { EngineInterface, Register, RenderElement, ResolveInput } from 'claude-code'
+
+import { heading, lookOf } from './stack-guest'
+import type { Look } from './stack-guest'
 
 // side-stack: one side pane that other mods ("guests") draw their sections
 // into, one under the other, instead of each opening a pane of its own (the
@@ -377,9 +380,7 @@ const saveZones = async ($: EngineInterface, change: (now: Zones) => Zones): Pro
   return { zones: z }
 }
 
-const HELP =
-  'Change it with /stack order 3,1,2 (the body), /stack header 1 or /stack footer 2 (numbers or names, or a mix), ' +
-  '/stack header none, /stack footer none, or /stack order reset (all back to install order).'
+const HELP = 'Usage: /stack order|header|footer 3,1,2 · none · reset'
 
 // /stack order|header|footer [list | none | reset]: show the zones, or set one.
 const zoneCommand = async ($: EngineInterface, zone: 'order' | 'header' | 'footer', arg: string): Promise<string> => {
@@ -391,9 +392,10 @@ const zoneCommand = async ($: EngineInterface, zone: 'order' | 'header' | 'foote
   const show = (v: typeof view): string => {
     let i = 0
     const shown = (n: string) => flags[n] === true || lastBeneath.includes(n)
-    const group = (label: string, items: string[], empty: string) =>
-      items.length === 0 ? [`${label}: ${empty}`] : [`${label}:`, ...items.map(n => `${++i} · ${n}${shown(n) ? '' : ' (not shown)'}`)]
-    return [...group('Header', v.header, '(empty)'), ...group('Body', v.body, '(empty)'), ...group('Footer', v.footer, '(empty)')].join('\n')
+    // An empty zone is left out.
+    const group = (label: string, items: string[]) =>
+      items.length === 0 ? [] : [`${label}:`, ...items.map(n => `${++i} · ${n}${shown(n) ? '' : ' (not shown)'}`)]
+    return [...group('Header', v.header), ...group('Body', v.body), ...group('Footer', v.footer)].join('\n')
   }
   if (arg === '') return `${show(view)}\n${HELP}`
   // The change, applied to the zones as saved at the moment of writing.
@@ -439,6 +441,41 @@ const zoneCommand = async ($: EngineInterface, zone: 'order' | 'header' | 'foote
   return `${done}\n${show(numbered(next, flags, lastBeneath))}`
 }
 
+// Opens the pane for a guest's showStack ask and answers with the same number.
+const answerAsk = async ($: EngineInterface, e: unknown, next: (e: never) => Promise<unknown>): Promise<never> => {
+  const result = await next(e as never)
+  const ask = (e as { value?: unknown }).value
+  if (typeof ask !== 'number') return result as never
+  try {
+    const cfg = await readConfig($)
+    // Not awaited: a pane that waits for a wider terminal holds nothing up.
+    void $.ui.open({ id: PANE_ID, title: cfg.title }).catch(() => undefined)
+    await update($, present, () => true)
+    await update($, shownFor, () => ask)
+  } catch {
+    // No answer: the guest falls back on its own.
+  }
+  return result as never
+}
+
+// The empty pane: a heading and how to fill it. One view for both looks
+// (see stack-guest.tsx); today they draw the same tree.
+const drawEmpty = <E extends ResolveInput>($: EngineInterface, e: E, look: Look, below: RenderElement): RenderElement => {
+  const { Box, Text } = $.ui.resolve(e)
+  return (
+    <Box flexDirection="column">
+      {below}
+      {heading($, e, look, 'side-stack', 'Stack', 'empty')}
+      <Text dimColor>Install one of these to fill this pane:</Text>
+      {GUESTS.map(name => (
+        <Text key={`install-${name}`} dimColor>
+          /plugin install {name}@lucas-tools
+        </Text>
+      ))}
+    </Box>
+  ) as RenderElement
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     // A new session: nothing drawn in it yet.
@@ -479,15 +516,13 @@ export const register: Register = on => {
   on('command.run', async ($, e, next) => {
     await resync($)
     if (e.command !== 'stack') return next(e)
-    const cfg = await readConfig($)
     const words = e.args.trim().split(/\s+/).filter(w => w !== '')
     const first = words[0]
     if (first === 'order' || first === 'header' || first === 'footer') {
       return { text: await zoneCommand($, first, e.args.trim().slice(first.length).trim()) }
     }
-    if (words.length > 0) {
-      return { text: 'Usage: /stack (open the pane), /stack order (show the sections, numbered), /stack order 3,1,2, /stack header 1, /stack footer 2, /stack header none, /stack footer none, /stack order reset' }
-    }
+    if (words.length > 0) return { text: HELP }
+    const cfg = await readConfig($)
     // Another plugin asking for the pane (to bring a section forward) gets the
     // outcome as a value and nothing is printed: in a headless run
     // (`claude -p`) a printed line would land in the run's output.
@@ -505,24 +540,13 @@ export const register: Register = on => {
 
   // A guest asking for the pane by its counter: open it with no prompt in the
   // chat, then answer with the same number. Only watched; the write goes on.
-  on('state.set', { plugin: 'plan-checklist', key: 'showStack' }, async ($, e, next) => {
-    const result = await next(e)
-    const ask = (e as { value?: unknown }).value
-    if (typeof ask !== 'number') return result
-    try {
-      const cfg = await readConfig($)
-      // Not awaited: a pane that waits for a wider terminal holds nothing up.
-      void $.ui.open({ id: PANE_ID, title: cfg.title }).catch(() => undefined)
-      await update($, present, () => true)
-      await update($, shownFor, () => ask)
-    } catch {
-      // No answer: the guest falls back on its own.
-    }
-    return result
-  }).catch(($, e, next) => next(e))
+  // (One matcher per guest: the module scan needs each key written out.)
+  on('state.set', { plugin: 'plan-checklist', key: 'showStack' }, answerAsk).catch(($, e, next) => next(e))
+  on('state.set', { plugin: 'idea-shelf', key: 'showStack' }, answerAsk).catch(($, e, next) => next(e))
+  on('state.set', { plugin: 'assumptions-pane', key: 'showStack' }, answerAsk).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box } = $.ui.resolve(e)
     // A render may not write state: a new session id is set up from a timer.
     const id = await currentSession($)
     // Read while drawing, so the emptying of state at a /clear redraws the pane.
@@ -545,17 +569,7 @@ export const register: Register = on => {
     // its `stacked` flag tells that it draws.
     const flags = await stackedFlags($)
     const filled = hasContent(below) || Object.values(flags).some(f => f)
-    if (!filled) {
-      return (
-        <Box flexDirection="column">
-          {below}
-          <Text dimColor>Install {GUESTS.slice(0, -1).join(', ')} or {GUESTS.at(-1)} to fill this pane:</Text>
-          {GUESTS.map(name => (
-            <Text dimColor>/plugin install {name}@lucas-tools</Text>
-          ))}
-        </Box>
-      )
-    }
+    if (!filled) return drawEmpty($, e, lookOf(e.surface), below)
     // The section found beneath, or an empty slot a guest above fills.
     const take = (name: string): unknown => {
       const found = sections.get(name)

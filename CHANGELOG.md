@@ -2,6 +2,13 @@
 
 Versions are the `version` in `.claude-plugin/plugin.json`. Newest first.
 
+## 0.5.0 (2026-11-18)
+
+- New `hooks/stack-guest.tsx`: the guest protocol (presence, slot, drawn-once check, silent ask for the pane, the Remote Control rule) and the section heading in one file, copied byte for byte into each guest.
+- Rendering split by surface: one look for the terminal, one for the apps (desktop, mobile, VS Code), set in `STYLE`. Both draw the same tree for now.
+- idea-shelf and assumptions-pane can now ask for the pane silently (their `showStack` counters), as plan-checklist does.
+- The empty pane has a `Stack · empty` heading; `/stack order` leaves out empty zones; one short usage line.
+
 ## 0.4.9 (2026-11-18)
 
 - Guest guide: on Claude Code 2.1.327 and later a guest's hook must name `plugin: '*'` to draw in the Stack pane; how to keep older builds working too.

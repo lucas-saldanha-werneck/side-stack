@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/lucas-saldanha-werneck/side-stack/actions/workflows/test.yml/badge.svg)](https://github.com/lucas-saldanha-werneck/side-stack/actions/workflows/test.yml)
 [![License](https://img.shields.io/github/license/lucas-saldanha-werneck/side-stack)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.8-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue)](CHANGELOG.md)
 [![plugin score (proposal)](https://img.shields.io/badge/plugin%20score%20(proposal)-98.0%20A-brightgreen)](https://github.com/NVIDIA/SkillEvaluator/issues/508)
 
 A Claude Code mod that opens one side pane, titled Stack, where the other side panes stack one under
@@ -95,7 +95,8 @@ Each guest works alone too. Without side-stack, it opens its own pane and its ow
 - You type `/stack` to open it at any width.
 - You type `/stack order 3,1,2` to reorder the body, or `/stack header 1` to pin a section to the top;
   `/stack order reset` puts everything back.
-- With no other plugin installed, the pane shows one dim line with the command that installs each.
+- With no other plugin installed, the pane shows a `Stack · empty` heading and the command that
+  installs each guest.
 
 ## Settings
 
@@ -116,16 +117,16 @@ updates never touch it.
 By default the sections follow install (load) order: the plugins load in an order the engine picks,
 and that order is what you see. `/stack order` lists every section side-stack knows (the four
 guests below, plus any other plugin whose section it has seen in the pane), numbered top to bottom
-and grouped as Header, Body and Footer; a name not drawing now is marked `(not shown)`:
+and grouped as Header, Body and Footer (an empty zone is left out); a name not drawing now is marked
+`(not shown)`:
 
 ```
-Header: (empty)
 Body:
 1 · plan-checklist
 2 · idea-shelf
 3 · assumptions-pane (not shown)
 4 · clean-view (not shown)
-Footer: (empty)
+Usage: /stack order|header|footer 3,1,2 · none · reset
 ```
 
 To change the order of the body, list the numbers, the names, or a mix:
@@ -252,19 +253,42 @@ The protocol, version 4:
    })
    ```
 
-   Start the section with a one-line heading (`Ideas`, `Assumptions`, `Plan 2/4`) so stacked parts
-   are told apart.
+   Start the section with a one-line heading (`Ideas · 2`, `Assumptions · 1 open`, `Plan 2/4 · 1m 5s`)
+   so stacked parts are told apart. The four known guests draw it with `heading()` from
+   [`hooks/stack-guest.tsx`](hooks/stack-guest.tsx): the name in a theme color, a dim detail, a dim
+   divider that fills the row, and an optional button at the end. The heading is also the line
+   between two sections, so a section adds no blank rows of its own, and an empty section folds to
+   its heading alone.
 5. **Bring the stack forward, silently.** Declare a number `showStack` in your own state and write
-   it one higher (`update($, showStack, n => (n ?? 0) + 1)`). side-stack (0.4.7 and later) hooks
-   that write, opens its pane with `$.ui.open` and answers by writing the same number to
+   it one higher (`update($, showStack, n => (n ?? 0) + 1)`). side-stack hooks that write (0.4.7 and
+   later for plan-checklist; 0.5.0 and later for idea-shelf and assumptions-pane too), opens its pane with `$.ui.open` and answers by writing the same number to
    `{ plugin: 'side-stack', key: 'shownFor' }`. Nothing shows in the chat. side-stack hooks the
    write by plugin name, so a new guest is added to its `state.set` hook. Read `shownFor` from a
    later timer tick; if it does not match, you face an older side-stack: running its command,
    `void $.command.run({ command: 'stack' }).catch(() => {})`, still works, but it shows as a
    prompt in the chat ("Prompt from the <guest> plugin"), is queued until the session is idle and
    rejects inside a hook the turn waits on. Opened this way the pane is "unasked": in the terminal
-   it shows from 144 columns (110 once opened before) and waits below that.
+   it shows from 144 columns (110 once opened before) and waits below that. Skip the ask when
+   `$.ui.panes()` already lists `side-stack`, and when the person's last prompt came through Remote
+   Control (origin `bridge`): no pane shows there, and a `/stack` run would only wait in the chat.
+   `showStack()` in `hooks/stack-guest.tsx` does all of this.
 6. **side-stack absent:** behave as you do alone: your own pane, your own tab.
+
+## Shared guest code, and where the terminal and app looks live
+
+The protocol above, the section heading and the two looks are in one file,
+[`hooks/stack-guest.tsx`](hooks/stack-guest.tsx). This repo holds the source copy. Each known guest
+(plan-checklist, idea-shelf, assumptions-pane, clean-view) carries a byte-identical copy in its own
+`hooks/` (plugins cannot import each other), and each guest's CI fails when its copy differs from
+the one on side-stack's `main`. Change it here first, then copy it to the guests.
+
+**Terminal look and app look.** Every pane that draws (side-stack and the four guests) splits its
+drawing by surface: `lookOf(e.surface)` gives `'terminal'` for the terminal and `'app'` for the
+desktop app, the mobile app and VS Code. Each view (side-stack's empty pane, each guest's section
+and own pane) is one function that takes that look. What each look draws with (the divider
+character, each section's heading color) is in `STYLE` in `hooks/stack-guest.tsx`, one entry per
+look. Today both entries are the same and both looks draw the same tree. To change one place only,
+edit its `STYLE` entry, or branch on `look === 'app'` inside the view; the other place stays as it is.
 
 ## How it works
 
