@@ -1208,12 +1208,13 @@ const asker = (tier?: 'prepend' | 'append', name: 'plan-checklist' | 'idea-shelf
     on('command.run', { command: 'ask' }, async $ => {
       // Each reference written out: the module scan reads only literal plugin and key.
       // The register function runs on its own (no closure): the name comes from $.
-      const me = $.plugin.name.split('@')[0]
+      const me = $.plugin.name.split('@')[0] ?? ''
       if (me === 'idea-shelf') await $.state.set({ plugin: 'idea-shelf', key: 'showStack' } as never, 7 as never)
       else if (me === 'assumptions-pane') await $.state.set({ plugin: 'assumptions-pane', key: 'showStack' } as never, 7 as never)
       else await $.state.set({ plugin: 'plan-checklist', key: 'showStack' }, 7)
       const { value } = await $.state.get({ plugin: 'side-stack', key: 'shownFor' })
-      return { text: 'shownFor=' + String(value ?? 0) }
+      const by = (await $.state.get({ plugin: 'side-stack', key: 'shownBy' })).value as Record<string, number> | undefined
+      return { text: 'shownFor=' + String(value ?? 0) + ' shownBy=' + String(by?.[me] ?? 0) }
     })
   },
 })
@@ -1230,6 +1231,7 @@ for (const tier of [undefined, 'prepend', 'append'] as const) {
     opened.length = 0
     const answer = await $.command.run({ command: 'ask', args: '' } as never)
     expect(JSON.stringify(answer)).toContain('shownFor=7')
+    expect(JSON.stringify(answer)).toContain('shownBy=7')
     expect(opened).toEqual([expect.objectContaining({ id: 'side-stack', title: 'Stack' })])
     expect(ran).not.toContain('stack')
   })
@@ -1246,7 +1248,9 @@ for (const guest of ['idea-shelf', 'assumptions-pane'] as const) {
     await start($)
     opened.length = 0
     const answer = await $.command.run({ command: 'ask', args: '' } as never)
-    expect(JSON.stringify(answer)).toContain('shownFor=7')
+    // Answered in its own entry; shownFor stays plan-checklist's.
+    expect(JSON.stringify(answer)).toContain('shownBy=7')
+    expect(JSON.stringify(answer)).toContain('shownFor=0')
     expect(opened).toEqual([expect.objectContaining({ id: 'side-stack', title: 'Stack' })])
     expect(ran).not.toContain('stack')
   })

@@ -33,8 +33,12 @@ export const DEFAULT_TITLE = 'Stack'
 export const GUESTS = ['assumptions-pane', 'idea-shelf', 'plan-checklist', 'clean-view'] as const
 
 const present = atom({ plugin: 'side-stack', key: 'present' } as const, false)
-// The last guest ask (its showStack number) this host answered by opening the pane.
+// The last plan-checklist ask (its showStack number) this host answered by opening
+// the pane, as 0.4.7 to 0.5.0 wrote it for every guest.
 const shownFor = atom({ plugin: 'side-stack', key: 'shownFor' } as const, 0)
+// Each guest's last ask answered, by guest name: each counts its own showStack,
+// so each reads its own answer.
+const shownBy = atom({ plugin: 'side-stack', key: 'shownBy' } as const, {} as Record<string, number>)
 
 // Each known guest's own flag: true while it draws its section into the stack.
 // Only the guest writes it; side-stack reads it while drawing, which redraws the
@@ -445,13 +449,16 @@ const zoneCommand = async ($: EngineInterface, zone: 'order' | 'header' | 'foote
 const answerAsk = async ($: EngineInterface, e: unknown, next: (e: never) => Promise<unknown>): Promise<never> => {
   const result = await next(e as never)
   const ask = (e as { value?: unknown }).value
-  if (typeof ask !== 'number') return result as never
+  const guest = (e as { plugin?: unknown }).plugin
+  if (typeof ask !== 'number' || typeof guest !== 'string') return result as never
   try {
     const cfg = await readConfig($)
     // Not awaited: a pane that waits for a wider terminal holds nothing up.
     void $.ui.open({ id: PANE_ID, title: cfg.title }).catch(() => undefined)
     await update($, present, () => true)
-    await update($, shownFor, () => ask)
+    await update($, shownBy, by => ({ ...by, [guest]: ask }))
+    // plan-checklist 0.3.x reads only shownFor.
+    if (guest === 'plan-checklist') await update($, shownFor, () => ask)
   } catch {
     // No answer: the guest falls back on its own.
   }

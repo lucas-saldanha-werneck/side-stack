@@ -11,8 +11,10 @@ declare module 'claude-code' {
       // Where each section goes (plugin names; null = empty, or install order for `order`).
       zones: { order: string[] | null; header: string[] | null; footer: string[] | null }
       setUpFor: string
-      // The last guest ask (its `showStack` number) answered by opening the pane.
+      // plan-checklist's last ask (its `showStack` number) answered by opening the pane.
       shownFor: number
+      // Each guest's last ask answered, by guest name (0.5.1 and later).
+      shownBy: Record<string, number>
     }
     // Each known guest's own flag, written by that guest: true while it draws
     // its section into the pane `side-stack`. side-stack only reads them.
