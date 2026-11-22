@@ -86,8 +86,9 @@ export const STACK_PANE = 'side-stack'
 // leaves an empty Box keyed SLOT + name where it wants a guest drawn above it.
 export const SECTION = 'side-stack:'
 export const SLOT = 'side-stack:slot:'
-// Plugin load order is unknown: look for the host soon after start, and once more a second later.
-export const HOST_CHECKS_MS = [100, 1100] as const
+// Plugin load order is unknown, and on a loaded machine plugins can load many seconds apart:
+// look for the host soon after start, a second later, and again up to a minute later.
+export const HOST_CHECKS_MS = [100, 1100, 5000, 15000, 60000] as const
 // The own pane's one line while the section draws in the Stack pane, so a list never shows twice.
 export const STACKED_LINE = 'Shown in the Stack pane (/stack)'
 
