@@ -2,6 +2,9 @@
 
 Versions are the `version` in `.claude-plugin/plugin.json`. Newest first.
 
+## 0.5.2 (2026-11-22)
+- Guest protocol: the host is looked for again 5 s, 15 s and 60 s after start (`HOST_CHECKS_MS`), so a guest that opened its own pane before side-stack loaded (slow machine) closes it later instead of staying as a separate tab.
+
 ## 0.5.1 (2026-11-18)
 
 - Answer each guest's showStack ask in its own entry, `shownBy[<guest>]`, so two guests asking at once never read each other's number (plan-checklist still gets `shownFor` too).
